@@ -1,0 +1,883 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>彈珠戰警</title>
+<style>
+html,body{margin:0;height:100%;background:#2a1430;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent}
+body{display:flex;align-items:center;justify-content:center}
+canvas{display:block;touch-action:none}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+'use strict';
+/* =========================================================
+   彈珠戰警 — 小鋼珠彈珠台模擬
+   投珠 → 抽倍率並亮燈 → 可加碼(最高99) → 拉桿發射 → 落入亮燈格中獎
+   ========================================================= */
+const W = 480, H = 1150;
+const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+let scale = 1, dpr = 1, bg = null;
+
+/* ---------- 盤面幾何 ---------- */
+const BR = 6;                                  // 鋼珠半徑
+const AC = { x: 240, y: 420 }, AR = 210;       // 頂部弧形導軌
+const LEFT_X = 30, LANE_X = 420, RIGHT_X = 450;
+const FLOOR_Y = 780, POCKET_TOP = 732, NP = 15, PW = (LANE_X - LEFT_X) / NP;
+const LANE_CX = 435, PLUNGER_REST = 842, BALL_REST = PLUNGER_REST - BR, LANE_BOT = 870;
+const DIV_TOP = 450;
+const GATE_TOP = AC.y - Math.sqrt(AR * AR - (LANE_X - AC.x) ** 2);
+const G = 820, E_PIN = 0.5, E_WALL = 0.4, E_KICK = 0.85;
+const PULL_MAX = 80, VMIN = 860, VMAX = 1140;
+const KNOB_Y = 938;
+
+/* ---------- 出珠盤 ---------- */
+const TRAY = { x: 22, y: 1000, w: W - 44, h: 144 };
+const TR = 5;                                  // 盤中鋼珠半徑
+const PILE = [];                               // 堆珠位置，由底部中央往外堆成小山
+(function buildPile() {
+  const x0 = TRAY.x + 8 + TR + 2, x1 = TRAY.x + TRAY.w - 8 - TR - 2;
+  const yb = TRAY.y + TRAY.h - 8 - TR - 1, yt = TRAY.y + 22;
+  for (let r = 0; ; r++) {
+    const y = yb - r * TR * 1.732; if (y < yt) break;
+    for (let x = x0 + (r % 2) * TR; x <= x1; x += TR * 2)
+      PILE.push({ x, y, s: (yb - y) + Math.abs(x - W / 2) * 0.28 + Math.sin(x * 7.3 + r) * 2 });
+  }
+  PILE.sort((a, b) => a.s - b.s);
+})();
+
+/* ---------- 規則 ---------- */
+const MULTS = [2, 3, 4, 6, 8, 10];
+const COUNT = { 2: 4, 3: 3, 4: 3, 6: 2, 8: 1, 10: 1 };
+const WEIGHT = { 2: 28, 3: 22, 4: 18, 6: 14, 8: 10, 10: 8 };
+const MCOL = { 2: '#3ddc4a', 3: '#22d3ee', 4: '#3b82f6', 6: '#b45cff', 8: '#ff8a00', 10: '#ff2d55' };
+const MAX_BET = 99;
+
+/* ---------- 碰撞物件 ---------- */
+const segs = [], pins = [];
+function seg(x1, y1, x2, y2, opt) { segs.push(Object.assign({ x1, y1, x2, y2 }, opt || {})); }
+function pin(x, y, r, kind) { pins.push({ x, y, r, kind, glow: 0 }); }
+function segDist(px, py, s) {
+  const ex = s.x2 - s.x1, ey = s.y2 - s.y1;
+  const t = Math.max(0, Math.min(1, ((px - s.x1) * ex + (py - s.y1) * ey) / (ex * ex + ey * ey)));
+  return Math.hypot(px - s.x1 - ex * t, py - s.y1 - ey * t);
+}
+function hash(n) { const s = Math.sin(n * 12.9898) * 43758.5453; return s - Math.floor(s); }
+
+(function buildField() {
+  const AN = 56;
+  for (let i = 0; i < AN; i++) {
+    const a1 = Math.PI + Math.PI * i / AN, a2 = Math.PI + Math.PI * (i + 1) / AN;
+    seg(AC.x + AR * Math.cos(a1), AC.y + AR * Math.sin(a1), AC.x + AR * Math.cos(a2), AC.y + AR * Math.sin(a2));
+  }
+  seg(LEFT_X, AC.y, LEFT_X, FLOOR_Y);
+  seg(RIGHT_X, AC.y, RIGHT_X, LANE_BOT + 40);
+  seg(LANE_X, DIV_TOP, LANE_X, LANE_BOT + 40);
+  seg(LEFT_X, FLOOR_Y, LANE_X, FLOOR_Y);
+  seg(LANE_X, DIV_TOP, LANE_X, GATE_TOP, { oneWay: true });   // 單向閘：球進盤面後不能回發射道
+  for (let i = 1; i < NP; i++) { const x = LEFT_X + PW * i; seg(x, POCKET_TOP, x, FLOOR_Y, { divider: true }); pin(x, POCKET_TOP, 3.5, 'cap'); }
+  for (const y of [440, 495, 550, 605, 660]) seg(LEFT_X, y, LEFT_X + 14, y + 8, { kicker: true });
+  for (const y of [490, 545, 600, 655]) seg(LANE_X, y, LANE_X - 14, y + 8, { kicker: true });
+  seg(LEFT_X, 704, LEFT_X + 8, 709, { kicker: true });          // 底部小踢板，避免兩側邊格吃太多珠
+  seg(LANE_X, 704, LANE_X - 8, 709, { kicker: true });
+  for (const x of [120, 172, 224, 276, 328]) pin(x, 290, 4.5, 'post');
+  for (let j = 0, y = 330; y <= 700; j++, y += 26) {
+    const off = (j % 2) * 14;
+    for (let x = 48 + off; x <= 398; x += 28) {
+      if (y < AC.y + 10 && Math.hypot(x - AC.x, y - AC.y) > AR - 26) continue;
+      if (hash(j * 31 + x) < 0.16) continue;
+      // 與踢板保持至少一顆珠的間隙，避免卡珠
+      if (segs.some(s => s.kicker && segDist(x, y, s) < 3 + BR * 2 + 1)) continue;
+      pin(x, y, 3, 'nail');
+    }
+  }
+})();
+
+/* ---------- 物理 ---------- */
+function collideCircle(b, cx, cy, cr, e) {
+  const dx = b.x - cx, dy = b.y - cy, rr = cr + BR, d2 = dx * dx + dy * dy;
+  if (d2 >= rr * rr || d2 === 0) return 0;
+  const d = Math.sqrt(d2), nx = dx / d, ny = dy / d;
+  b.x = cx + nx * rr; b.y = cy + ny * rr;
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn >= 0) return 0;
+  const tx = -ny, ty = nx, vt = b.vx * tx + b.vy * ty;
+  const ee = -vn < 25 ? 0 : e;
+  const f = 1 - Math.min(0.12, -vn / 8000);
+  const nvn = -vn * ee, nvt = vt * f;
+  b.vx = nx * nvn + tx * nvt; b.vy = ny * nvn + ty * nvt;
+  return -vn;
+}
+function collideSeg(b, s, e) {
+  const ex = s.x2 - s.x1, ey = s.y2 - s.y1, L2 = ex * ex + ey * ey;
+  let t = ((b.x - s.x1) * ex + (b.y - s.y1) * ey) / L2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return collideCircle(b, s.x1 + ex * t, s.y1 + ey * t, 0, e);
+}
+function physStep(b, dt, fx) {
+  b.vy += G * dt;
+  b.x += b.vx * dt; b.y += b.vy * dt;
+  for (const s of segs) {
+    if (s.oneWay && !b.inField) continue;
+    if (b.x < Math.min(s.x1, s.x2) - BR - 1 || b.x > Math.max(s.x1, s.x2) + BR + 1 ||
+        b.y < Math.min(s.y1, s.y2) - BR - 1 || b.y > Math.max(s.y1, s.y2) + BR + 1) continue;
+    const imp = collideSeg(b, s, s.kicker ? E_KICK : E_WALL);
+    if (fx && imp > 80) sfx.wall(imp);
+  }
+  for (const p of pins) {
+    const dx = b.x - p.x, dy = b.y - p.y, rr = p.r + BR;
+    if (dx > rr || dx < -rr || dy > rr || dy < -rr) continue;
+    const imp = collideCircle(b, p.x, p.y, p.r, E_PIN);
+    if (imp > 40) {
+      b.vx += (Math.random() - 0.5) * imp * 0.12;     // 釘子微小誤差，讓落點更分散
+      if (fx) { p.glow = 1; sfx.ding(imp); }
+    }
+  }
+  if (!b.inField && b.x < LANE_X - BR - 1) b.inField = true;
+}
+// 回傳事件：pocket / back / oob / null
+function updateBall(b, fdt, fx) {
+  const n = Math.max(10, Math.ceil(fdt * 900)), dt = fdt / n;
+  for (let i = 0; i < n; i++) {
+    physStep(b, dt, fx);
+    if (b.inField && b.y > FLOOR_Y - BR - 4 && b.x > LEFT_X && b.x < LANE_X)
+      return { type: 'pocket', idx: Math.min(NP - 1, Math.max(0, Math.floor((b.x - LEFT_X) / PW))) };
+    if (!b.inField && b.x > LANE_X && b.vy > 0 && b.y >= BALL_REST) return { type: 'back' };
+    if (b.y > H + 20 || b.x < 0 || b.x > W || b.y < 0) return { type: 'oob' };
+  }
+  const sp = Math.hypot(b.vx, b.vy);
+  if (sp < 25) { b.still += fdt; if (b.still > 1.2) { b.vx += (Math.random() - 0.5) * 240; b.vy -= 120; b.still = 0; } }
+  else b.still = 0;
+  return null;
+}
+function launchVel(p) { return VMIN + p * (VMAX - VMIN) + (Math.random() - 0.5) * 30; }
+
+/* ---------- 音效 ---------- */
+let actx = null, master = null, muted = false, lastDing = 0, lastCount = 0, lastCoin = 0, nbuf = null;
+function au() {
+  try {
+    if (!actx) {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      master = actx.createGain(); master.gain.value = 0.8; master.connect(actx.destination);
+      nbuf = actx.createBuffer(1, actx.sampleRate * 0.5, actx.sampleRate);
+      const d = nbuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) {}
+}
+function aok() { return actx && !muted; }
+function tone(f, dur, type = 'sine', vol = 0.2, to = 0, delay = 0) {
+  if (!aok()) return;
+  const t = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.03);
+}
+function noise(dur, vol = 0.2, freq = 1500, q = 1, delay = 0) {
+  if (!aok()) return;
+  const t = actx.currentTime + delay, s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = nbuf; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t); s.stop(t + dur + 0.02);
+}
+const sfx = {
+  ding(imp) { if (!aok()) return; const t = actx.currentTime; if (t - lastDing < 0.02) return; lastDing = t;
+    const v = Math.min(0.16, 0.02 + imp / 4000), f = 2600 + Math.random() * 1600;
+    tone(f, 0.12, 'sine', v); tone(f * 1.5, 0.06, 'triangle', v * 0.3); },
+  wall(imp) { if (!aok()) return; const t = actx.currentTime; if (t - lastDing < 0.03) return; lastDing = t;
+    noise(0.04, Math.min(0.15, imp / 3000), 3500, 3); },
+  insert() { tone(1900, 0.08, 'square', 0.04); tone(2800, 0.15, 'sine', 0.12, 0, 0.03); noise(0.05, 0.1, 5000, 2); tone(1250, 0.1, 'triangle', 0.08, 0, 0.12); },
+  refill() { for (let i = 0; i < 10; i++) tone(2000 + Math.random() * 1500, 0.06, 'sine', 0.08, 0, i * 0.045); },
+  tick() { tone(1100, 0.04, 'square', 0.05); },
+  lit() { [784, 988, 1175, 1568].forEach((f, i) => tone(f, 0.15, 'square', 0.07, 0, i * 0.07)); },
+  ratchet() { noise(0.02, 0.08, 2500, 4); tone(600, 0.02, 'square', 0.03); },
+  spring() { tone(180, 0.15, 'sawtooth', 0.06, 90); noise(0.08, 0.1, 800, 1); },
+  launch(p) { noise(0.12, 0.25, 600, 0.8); tone(140, 0.18, 'sine', 0.25, 60); tone(900, 0.25, 'triangle', 0.05 * (1 + p), 2400); },
+  win(m) { const seq = m >= 8 ? [523, 659, 784, 1047, 784, 1047, 1319, 1568] : [523, 659, 784, 1047, 1319];
+    seq.forEach((f, i) => { tone(f, 0.18, 'square', 0.07, 0, i * 0.09); tone(f * 2, 0.12, 'sine', 0.04, 0, i * 0.09); }); },
+  lose() { tone(440, 0.18, 'square', 0.05); tone(330, 0.3, 'square', 0.05, 0, 0.16); },
+  drop() { tone(320, 0.12, 'sine', 0.2, 160); noise(0.06, 0.12, 1200, 2); },
+  count() { if (!aok()) return; const t = actx.currentTime; if (t - lastCount < 0.035) return; lastCount = t; tone(2400 + Math.random() * 600, 0.05, 'sine', 0.06); },
+  deny() { tone(200, 0.12, 'square', 0.05); },
+  clink() { if (!aok()) return; const t = actx.currentTime; if (t - lastCount < 0.03) return; lastCount = t;
+    const f = 3000 + Math.random() * 1800; tone(f, 0.07, 'sine', 0.07); tone(f * 0.62, 0.05, 'triangle', 0.03); },
+  coin() { if (!aok()) return; const t = actx.currentTime; if (t - lastCoin < 0.05) return; lastCoin = t;
+    tone(2600, 0.08, 'sine', 0.08); noise(0.03, 0.06, 5000, 2); },
+  back() { tone(250, 0.2, 'triangle', 0.08, 150); }
+};
+function vib(ms) { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} }
+
+/* ---------- 遊戲狀態 ---------- */
+function loadBalls() { try { const v = parseInt(localStorage.getItem('dzzj_balls'), 10); return isNaN(v) ? 100 : v; } catch (e) { return 100; } }
+function save() { try { localStorage.setItem('dzzj_balls', String(balls + pending + incoming)); } catch (e) {} }
+
+let balls = loadBalls();                       // 出珠盤裡的鋼珠
+let pending = 0, incoming = 0, hopAcc = 0, doneT = 0;   // 待退珠 / 正在掉落中的珠
+let bet = 0, mult = 0, lit = new Set(), state = 'IDLE';      // IDLE ROLL READY FLY RESULT
+let rollT = 0, rollNext = 0, rollIdx = 0, targetIdx = 0, rollLit = new Set();
+let resT = 0, win = 0, hitIdx = -1;
+let msg = '', msgCol = '#fff', msgT = 0;
+let pull = 0, pullVis = 0, dragging = false, dragStart = 0, keyPull = false, lastRatchet = 0;
+let bigText = '', bigCol = '#fff', bigT = 0;
+const ball = { x: LANE_CX, y: BALL_REST, vx: 0, vy: 0, inField: false, still: 0 };
+const particles = [], flyers = [];
+let T = 0;
+
+function say(t, c) { msg = t; msgCol = c || '#fff'; msgT = 0; }
+function resetBall() { ball.x = LANE_CX; ball.y = BALL_REST; ball.vx = ball.vy = 0; ball.inField = false; ball.still = 0; }
+function shuffleLit(k) {
+  const a = [...Array(NP).keys()];
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; }
+  return new Set(a.slice(0, k));
+}
+// 亮燈格平均分散：等距排列再隨機整體旋轉，每一格被點亮的機率相同
+const MIN_GAP = { 1: 0, 2: 5, 3: 4, 4: 3 };
+function spreadLit(k) {
+  const z = NP / k;
+  for (let tries = 0; tries < 30; tries++) {
+    const off = Math.random() * NP, jit = tries < 29 ? 0.9 : 0;
+    const a = [...Array(k).keys()].map(i => ((Math.floor(off + i * z + (Math.random() * 2 - 1) * jit)) % NP + NP) % NP).sort((x, y) => x - y);
+    const gaps = a.map((v, i) => (i ? v - a[i - 1] : v + NP - a[k - 1]));
+    if (k === 1 || gaps.every(g => g >= MIN_GAP[k])) return new Set(a);
+  }
+}
+function drawMult() {
+  let tot = 0; for (const m of MULTS) tot += WEIGHT[m];
+  let r = Math.random() * tot;
+  for (const m of MULTS) { r -= WEIGHT[m]; if (r < 0) return m; }
+  return 2;
+}
+
+function startRoll() {
+  state = 'ROLL'; rollT = 0; rollNext = 0; rollIdx = Math.random() * 6 | 0;
+  targetIdx = MULTS.indexOf(drawMult());
+  say('倍率抽選中…', '#ffe94d');
+}
+function busyPayout() { return pending > 0 || incoming > 0; }
+function canSkip() { return resT > 0.5 && !busyPayout(); }
+// 從出珠盤拿珠，飛進投珠口
+function takeBalls(n) {
+  for (let i = 0; i < n; i++) {
+    balls--;
+    const slot = PILE[balls] || { x: TRAY.x + 40 + Math.random() * (TRAY.w - 80), y: TRAY.y + 30 };
+    flyers.push({ kind: 'in', sx: slot.x, sy: slot.y, tx: 415, ty: 88, t: -Math.min(i, 40) * 0.03, dur: 0.5 });
+  }
+  save();
+}
+// 退珠器吐出一顆珠，掉進出珠盤
+function spawnOut() {
+  const slot = PILE[balls + incoming] || { x: TRAY.x + 30 + Math.random() * (TRAY.w - 60), y: TRAY.y + 26 };
+  incoming++;
+  flyers.push({ kind: 'out', sx: W / 2 + (Math.random() - 0.5) * 16, sy: TRAY.y + 10, tx: slot.x, ty: slot.y, t: 0,
+    dur: 0.22 + (slot.y - TRAY.y) / 500 + Math.abs(slot.x - W / 2) / 700 });
+}
+function insert() {
+  if (state === 'RESULT') { if (canSkip()) endRound(); else return; }
+  if (state === 'IDLE') {
+    if (busyPayout()) { say('出珠中，請稍候', '#fc6'); return; }
+    if (balls <= 0) { pending += 100; save(); say('補充 100 顆小鋼珠！', '#8ff'); return; }
+    takeBalls(1); bet = 1; startRoll(); return;
+  }
+  if (state === 'ROLL' || state === 'READY') addBet(1);
+}
+function addBet(n) {
+  if (state === 'RESULT') { if (canSkip()) endRound(); else return; }
+  if (state === 'IDLE') {
+    if (busyPayout()) { say('出珠中，請稍候', '#fc6'); return; }
+    if (balls <= 0) { sfx.deny(); say('珠子用完了，按「補珠」領 100 顆', '#fc6'); return; }
+    insert(); n -= 1; if (n <= 0) return;
+  }
+  if (state !== 'ROLL' && state !== 'READY') return;
+  const add = Math.min(n, MAX_BET - bet, balls);
+  if (add <= 0) { sfx.deny(); say(bet >= MAX_BET ? '已達最高押注 99 顆' : '珠子不夠了', '#fc6'); return; }
+  takeBalls(add); bet += add;
+  if (state === 'READY') say(`押注 ${bet} 顆 × ${mult} 倍，拉桿發射！`, '#fff');
+}
+function release() {
+  const p = pull / PULL_MAX; pull = 0; dragging = false; keyPull = false;
+  if (p < 0.06) return;
+  if (state !== 'READY') {
+    sfx.spring();
+    if (state === 'IDLE') say('請先投入小鋼珠', '#fc6');
+    else if (state === 'ROLL') say('倍率抽選中，請稍候', '#fc6');
+    return;
+  }
+  ball.vx = (Math.random() - 0.5) * 8; ball.vy = -launchVel(p);
+  ball.inField = false; ball.still = 0;
+  state = 'FLY'; sfx.launch(p); vib(15); say('', '#fff');
+}
+function onBallEvent(r) {
+  if (r.type === 'pocket') {
+    state = 'RESULT'; resT = 0; doneT = 0; hitIdx = r.idx;
+    ball.y = FLOOR_Y - BR; ball.x = LEFT_X + PW * (r.idx + 0.5); ball.vx = ball.vy = 0;
+    sfx.drop();
+    if (lit.has(r.idx)) {
+      win = bet * mult; pending += win; save();
+      setTimeout(() => sfx.win(mult), 120); vib([30, 40, 60]);
+      burst(ball.x, POCKET_TOP + 20, MCOL[mult], mult >= 8 ? 70 : 40);
+      say(`★ 中獎！押 ${bet} × ${mult} 倍 = ${win} 顆 ★`, MCOL[mult]);
+      bigText = mult >= 8 ? `大獎 ×${mult}` : `中獎 ×${mult}`; bigCol = MCOL[mult]; bigT = 0;
+    } else {
+      win = 0; setTimeout(() => sfx.lose(), 150);
+      say(`第 ${r.idx + 1} 格沒亮燈，再接再厲！`, '#ddd');
+    }
+  } else {
+    state = 'READY'; resetBall(); sfx.back();
+    say('力道不夠，球滾回來了，再拉一次', '#fc6');
+  }
+}
+function endRound() {
+  state = 'IDLE'; bet = 0; mult = 0; lit = new Set(); hitIdx = -1; win = 0; resetBall();
+  say(balls > 0 ? '投入小鋼珠開始下一局' : '珠子用完了，按「補珠」領 100 顆', '#fff');
+}
+function burst(x, y, col, n) {
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2, s = 80 + Math.random() * 320;
+    particles.push({ x, y, vx: Math.cos(a) * s, vy: Math.sin(a) * s - 200, life: 1, col: Math.random() < 0.3 ? '#fff' : col, r: 2 + Math.random() * 3 });
+  }
+}
+
+/* ---------- 更新 ---------- */
+function update(fdt) {
+  T += fdt; msgT += fdt;
+  if (keyPull) {
+    pull = Math.min(PULL_MAX, pull + PULL_MAX * fdt / 1.0);
+  }
+  if (keyPull || dragging) {
+    pullVis = pull;
+    if (Math.abs(pull - lastRatchet) >= 10) { lastRatchet = Math.round(pull / 10) * 10; sfx.ratchet(); }
+  } else {
+    pullVis = Math.max(0, pullVis - fdt * 1400); lastRatchet = 0;
+  }
+
+  if (state === 'ROLL') {
+    rollT += fdt;
+    if (rollT >= rollNext) {
+      if (rollT > 1.3 && rollIdx === targetIdx) {
+        mult = MULTS[targetIdx]; lit = spreadLit(COUNT[mult]); state = 'READY'; sfx.lit();
+        say(`× ${mult} 倍！亮 ${lit.size} 格 — 可加碼，拉桿發射`, MCOL[mult]);
+      } else {
+        rollIdx = (rollIdx + 1) % 6; sfx.tick();
+        rollLit = spreadLit(COUNT[MULTS[rollIdx]]);
+        rollNext = rollT + 0.045 + rollT * 0.09;
+      }
+    }
+  }
+  if (state === 'FLY') {
+    const r = updateBall(ball, fdt, true);
+    if (r) onBallEvent(r);
+  } else if (state !== 'RESULT') {
+    ball.x = LANE_CX; ball.y = BALL_REST + pullVis * 0.3;
+  }
+  if (state === 'RESULT') {
+    resT += fdt;
+    if (!busyPayout() && resT > 1.2) { doneT += fdt; if (doneT > (win ? 1.0 : 0.4)) endRound(); }
+  }
+
+  // 退珠器：待退越多吐得越快
+  if (pending > 0) {
+    hopAcc += Math.min(150, Math.max(18, pending / 2)) * fdt;
+    while (hopAcc >= 1 && pending > 0) { hopAcc--; pending--; spawnOut(); }
+  } else hopAcc = 0;
+  for (let i = flyers.length - 1; i >= 0; i--) {
+    const f = flyers[i]; f.t += fdt;
+    if (f.t >= f.dur) {
+      flyers.splice(i, 1);
+      if (f.kind === 'out') { incoming--; balls++; save(); sfx.clink(); }
+      else sfx.coin();
+    }
+  }
+
+  for (const p of pins) if (p.glow > 0) p.glow = Math.max(0, p.glow - fdt * 4);
+  for (let i = particles.length - 1; i >= 0; i--) {
+    const p = particles[i]; p.vy += 600 * fdt; p.x += p.vx * fdt; p.y += p.vy * fdt; p.life -= fdt * 0.9;
+    if (p.life <= 0) particles.splice(i, 1);
+  }
+  for (const b of BTN) b.press = Math.max(0, b.press - fdt);
+  bigT += fdt;
+}
+
+/* ---------- 繪圖工具 ---------- */
+const FONT = '"Microsoft JhengHei","PingFang TC","Noto Sans TC","Heiti TC",sans-serif';
+const RB = ['#ff3b3b', '#ff9f1a', '#ffe11a', '#3ddc4a', '#1fa2ff', '#4b3bff', '#c13bff'];
+function rr(c, x, y, w, h, r) {
+  c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+function rainbow(c, x, y, w, h, sw = 5) {
+  c.save(); c.beginPath(); c.rect(x, y, w, h); c.clip();
+  const n = Math.ceil((w + h) / sw) + 2;
+  for (let i = 0; i < n; i++) {
+    const o = x - h + i * sw; c.fillStyle = RB[i % 7];
+    c.beginPath(); c.moveTo(o, y + h); c.lineTo(o + sw, y + h); c.lineTo(o + sw + h, y); c.lineTo(o + h, y); c.closePath(); c.fill();
+  }
+  c.restore();
+}
+function fieldPath(c) {
+  c.beginPath(); c.moveTo(LEFT_X, FLOOR_Y); c.lineTo(LEFT_X, AC.y);
+  c.arc(AC.x, AC.y, AR, Math.PI, Math.PI * 2);
+  c.lineTo(RIGHT_X, LANE_BOT); c.lineTo(LANE_X, LANE_BOT); c.lineTo(LANE_X, FLOOR_Y); c.closePath();
+}
+function chrome(c, x0, y0, x1, y1) {
+  const g = c.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, '#fafafa'); g.addColorStop(0.45, '#b9bec6'); g.addColorStop(0.55, '#8d939c'); g.addColorStop(1, '#e8eaee');
+  return g;
+}
+function titleText(c, x, y, size) {
+  c.save(); c.font = `900 ${size}px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle';
+  c.lineJoin = 'round';
+  c.lineWidth = size * 0.22; c.strokeStyle = '#ffffff'; c.strokeText('彈珠戰警', x, y);
+  c.lineWidth = size * 0.1; c.strokeStyle = '#1d5a12'; c.strokeText('彈珠戰警', x, y);
+  const g = c.createLinearGradient(0, y - size / 2, 0, y + size / 2);
+  g.addColorStop(0, '#b6f26b'); g.addColorStop(0.5, '#4caf25'); g.addColorStop(1, '#2d7a14');
+  c.fillStyle = g; c.fillText('彈珠戰警', x, y);
+  const w = c.measureText('彈珠戰警').width;
+  for (let i = 0; i < 4; i++) {
+    const bx = x - w / 2 + w * (i + 0.5) / 4 + size * 0.22, by = y - size * 0.32;
+    const bg2 = c.createRadialGradient(bx - 2, by - 2, 1, bx, by, size * 0.14);
+    bg2.addColorStop(0, '#fff'); bg2.addColorStop(1, '#7ec8ff');
+    c.fillStyle = bg2; c.beginPath(); c.arc(bx, by, size * 0.13, 0, Math.PI * 2); c.fill();
+  }
+  c.restore();
+}
+// 原創 Q 版戰警頭像
+function mascot(c, x, y, s, col, wink) {
+  c.save(); c.translate(x, y); c.scale(s, s); c.lineWidth = 3; c.strokeStyle = '#1a1a1a'; c.lineJoin = 'round';
+  c.fillStyle = col; c.beginPath(); c.arc(0, 0, 40, Math.PI, 0); c.lineTo(42, 14); c.quadraticCurveTo(0, 34, -42, 14); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = '#ffffff'; c.beginPath(); c.moveTo(-6, -40); c.lineTo(6, -40); c.lineTo(4, 0); c.lineTo(-4, 0); c.closePath(); c.fill();
+  c.fillStyle = '#ffd400'; c.beginPath(); c.moveTo(-26, -34); c.lineTo(0, -12); c.lineTo(26, -34); c.lineTo(32, -26); c.lineTo(0, 2); c.lineTo(-32, -26); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = '#ffe2c4'; c.beginPath(); c.ellipse(0, 24, 27, 20, 0, 0, Math.PI * 2); c.fill(); c.stroke();
+  c.fillStyle = '#2aa8ff'; rr(c, -32, 2, 64, 17, 8); c.fill(); c.stroke();
+  c.fillStyle = 'rgba(255,255,255,.85)'; rr(c, -26, 5, 18, 5, 2.5); c.fill();
+  c.fillStyle = '#1a1a1a';
+  c.beginPath(); c.arc(-10, 30, 3.2, 0, Math.PI * 2); c.fill();
+  if (wink) { c.beginPath(); c.moveTo(6, 30); c.lineTo(14, 28); c.stroke(); }
+  else { c.beginPath(); c.arc(10, 30, 3.2, 0, Math.PI * 2); c.fill(); }
+  c.beginPath(); c.arc(0, 36, 6, 0.15 * Math.PI, 0.85 * Math.PI); c.stroke();
+  c.fillStyle = '#ff8fa3'; c.beginPath(); c.arc(-18, 36, 4, 0, Math.PI * 2); c.arc(18, 36, 4, 0, Math.PI * 2); c.fill();
+  c.restore();
+}
+
+/* ---------- 靜態背景 ---------- */
+function buildBg() {
+  const c = document.createElement('canvas'); c.width = cv.width; c.height = cv.height;
+  const g = c.getContext('2d'); g.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+  drawStatic(g); bg = c;
+}
+function drawStatic(g) {
+  // 機身
+  let gr = g.createLinearGradient(0, 0, W, 0); gr.addColorStop(0, '#b80f4a'); gr.addColorStop(0.5, '#e8236a'); gr.addColorStop(1, '#b80f4a');
+  g.fillStyle = gr; g.fillRect(0, 0, W, H);
+  rainbow(g, 0, 0, 12, H, 6); rainbow(g, W - 12, 0, 12, H, 6);
+
+  // 上方面板
+  rr(g, 14, 6, W - 28, 190, 14); gr = g.createRadialGradient(240, 100, 10, 240, 100, 260);
+  gr.addColorStop(0, '#fff7a8'); gr.addColorStop(0.55, '#ffb3d1'); gr.addColorStop(1, '#ff4f93');
+  g.fillStyle = gr; g.fill();
+  g.save(); rr(g, 14, 6, W - 28, 190, 14); g.clip();
+  for (let i = 0; i < 28; i++) {
+    const a = i / 28 * Math.PI * 2; g.fillStyle = i % 2 ? 'rgba(255,255,255,.18)' : 'rgba(255,200,0,.12)';
+    g.beginPath(); g.moveTo(240, 100); g.arc(240, 100, 420, a, a + Math.PI / 28); g.closePath(); g.fill();
+  }
+  g.restore();
+  g.lineWidth = 3; g.strokeStyle = '#7a0730'; rr(g, 14, 6, W - 28, 190, 14); g.stroke();
+  titleText(g, 246, 34, 38);
+
+  // 顯示器框
+  const box = (x, w, label) => {
+    g.fillStyle = '#3a0016'; g.font = `900 12px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'alphabetic';
+    rr(g, x - 3, 65, w + 6, 59, 9); g.fillStyle = '#7a0730'; g.fill();
+    rr(g, x, 68, w, 53, 7); g.fillStyle = '#120006'; g.fill();
+    g.fillStyle = '#ffd6e6'; g.fillText(label, x + 6, 81);
+  };
+  box(26, 142, '珠數'); box(182, 82, '押注'); box(278, 82, '倍率');
+  // 投珠口
+  rr(g, 374, 62, 82, 66, 8); g.fillStyle = chrome(g, 374, 62, 456, 128); g.fill();
+  g.lineWidth = 2; g.strokeStyle = '#555'; g.stroke();
+  rr(g, 404, 72, 22, 30, 10); g.fillStyle = '#2b2b2b'; g.fill();
+  rr(g, 410, 76, 10, 22, 5); g.fillStyle = '#000'; g.fill();
+  g.fillStyle = '#333'; g.font = `900 13px ${FONT}`; g.textAlign = 'center'; g.fillText('投珠口', 415, 120);
+  // 燈座
+  for (let i = 0; i < 6; i++) { const x = 48 + i * 58; g.fillStyle = '#5a0020'; g.beginPath(); g.arc(x, 160, 22, 0, Math.PI * 2); g.fill(); }
+  g.save(); g.translate(418, 160); g.rotate(-0.08); g.fillStyle = '#7a0730'; g.font = `900 15px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('純屬娛樂', 0, -9); g.font = `700 10px ${FONT}`; g.fillText('虛擬鋼珠不可兌換', 0, 9); g.restore();
+
+  // 盤面外框
+  rr(g, 16, 200, W - 32, 672, 12); g.fillStyle = '#16123a'; g.fill();
+  rainbow(g, 20, 204, 6, 664, 5); rainbow(g, W - 26, 204, 6, 664, 5);
+  g.fillStyle = '#f7a1c4'; g.fillRect(26, 204, W - 52, 664);
+
+  // 盤面
+  g.save(); fieldPath(g); g.clip();
+  gr = g.createRadialGradient(225, 500, 20, 225, 500, 380); gr.addColorStop(0, '#fffbb0'); gr.addColorStop(0.6, '#ffe93a'); gr.addColorStop(1, '#ffc400');
+  g.fillStyle = gr; g.fillRect(0, 180, W, 720);
+  for (let i = 0; i < 32; i++) {
+    const a = i / 32 * Math.PI * 2; g.fillStyle = 'rgba(255,140,0,.13)';
+    g.beginPath(); g.moveTo(225, 500); g.arc(225, 500, 600, a, a + Math.PI / 32); g.closePath(); g.fill();
+  }
+  g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 2;
+  for (const r of [70, 130, 200]) { g.beginPath(); g.arc(225, 500, r, 0, Math.PI * 2); g.stroke(); }
+  titleText(g, 225, 250, 40);
+  g.globalAlpha = 0.9;
+  mascot(g, 130, 475, 0.95, '#e53935', false);
+  mascot(g, 318, 470, 0.95, '#1e88e5', true);
+  mascot(g, 224, 585, 1.15, '#ffffff', false);
+  g.globalAlpha = 1;
+  // 落袋區
+  gr = g.createLinearGradient(0, POCKET_TOP, 0, FLOOR_Y); gr.addColorStop(0, 'rgba(60,0,30,.15)'); gr.addColorStop(1, 'rgba(60,0,30,.45)');
+  g.fillStyle = gr; g.fillRect(LEFT_X, POCKET_TOP - 4, LANE_X - LEFT_X, FLOOR_Y - POCKET_TOP + 4);
+  // 發射道
+  g.fillStyle = 'rgba(80,0,40,.18)'; g.fillRect(LANE_X, DIV_TOP, RIGHT_X - LANE_X, LANE_BOT - DIV_TOP);
+  g.restore();
+
+  // 弧形導軌與牆
+  g.lineCap = 'round';
+  g.strokeStyle = chrome(g, 0, 200, 0, 420); g.lineWidth = 7;
+  g.beginPath(); g.arc(AC.x, AC.y, AR + 3.5, Math.PI, Math.PI * 2); g.stroke();
+  g.strokeStyle = '#c9ced6'; g.lineWidth = 7;
+  g.beginPath(); g.moveTo(LEFT_X - 3.5, AC.y); g.lineTo(LEFT_X - 3.5, FLOOR_Y + 3); g.stroke();
+  g.beginPath(); g.moveTo(RIGHT_X + 3.5, AC.y); g.lineTo(RIGHT_X + 3.5, LANE_BOT); g.stroke();
+  g.strokeStyle = 'rgba(160,255,40,.9)'; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(LANE_X, DIV_TOP); g.lineTo(LANE_X, LANE_BOT); g.stroke();
+  g.strokeStyle = 'rgba(160,255,40,.4)'; g.lineWidth = 3;
+  g.beginPath(); g.moveTo(LANE_X, DIV_TOP); g.lineTo(LANE_X, GATE_TOP + 2); g.stroke();
+  g.strokeStyle = '#c9ced6'; g.lineWidth = 4;
+  g.beginPath(); g.moveTo(LEFT_X, FLOOR_Y + 1); g.lineTo(LANE_X, FLOOR_Y + 1); g.stroke();
+  for (const s of segs) if (s.kicker) {
+    g.strokeStyle = '#d0d4da'; g.lineWidth = 4; g.beginPath(); g.moveTo(s.x1, s.y1); g.lineTo(s.x2, s.y2); g.stroke();
+  }
+  for (const s of segs) if (s.divider) {
+    g.strokeStyle = 'rgba(170,255,60,.85)'; g.lineWidth = 3; g.beginPath(); g.moveTo(s.x1, s.y1); g.lineTo(s.x2, s.y2); g.stroke();
+  }
+  // 釘子
+  for (const p of pins) {
+    g.fillStyle = 'rgba(0,0,0,.22)'; g.beginPath(); g.arc(p.x + 1.6, p.y + 2.2, p.r, 0, Math.PI * 2); g.fill();
+    const pg = g.createRadialGradient(p.x - p.r * 0.4, p.y - p.r * 0.4, 0.3, p.x, p.y, p.r);
+    if (p.kind === 'post') { pg.addColorStop(0, '#ffd2a8'); pg.addColorStop(0.5, '#ff7a1a'); pg.addColorStop(1, '#c24a00'); }
+    else if (p.kind === 'cap') { pg.addColorStop(0, '#ffb3b3'); pg.addColorStop(0.5, '#e01b1b'); pg.addColorStop(1, '#7a0000'); }
+    else { pg.addColorStop(0, '#fff5c4'); pg.addColorStop(0.5, '#d8a930'); pg.addColorStop(1, '#8a6210'); }
+    g.fillStyle = pg; g.beginPath(); g.arc(p.x, p.y, p.r, 0, Math.PI * 2); g.fill();
+  }
+
+  // 落袋下方彩虹帶
+  g.save(); g.beginPath(); g.rect(26, FLOOR_Y + 4, LANE_X - 26, LANE_BOT - FLOOR_Y - 2); g.clip();
+  g.translate(26, FLOOR_Y + 4); g.rotate(-0.06); rainbow(g, -10, 34, LANE_X + 20, 22, 7); g.restore();
+  // 發射座
+  g.fillStyle = '#3b3b44'; g.fillRect(LANE_X + 2, LANE_BOT - 2, RIGHT_X - LANE_X - 4, 8);
+
+  // 下方操作面板
+  rr(g, 14, 876, W - 28, 116, 14); gr = g.createLinearGradient(0, 876, 0, 992); gr.addColorStop(0, '#f0377c'); gr.addColorStop(1, '#a80c42');
+  g.fillStyle = gr; g.fill(); g.lineWidth = 3; g.strokeStyle = '#6d0629'; g.stroke();
+  g.fillStyle = '#ffe1ec'; g.font = `900 13px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('投 珠', 66, 893); g.fillText('加 碼', 245, 893); g.fillText('拉 桿', 435, 893);
+  g.fillStyle = 'rgba(255,225,236,.6)'; g.font = `700 9px ${FONT}`;
+  g.fillText('Z', 66, 982); g.fillText('X', 158, 982); g.fillText('C', 248, 982); g.fillText('V', 334, 982); g.fillText('空白鍵 / 往下拖', 420, 984);
+
+  // 出珠盤
+  rr(g, TRAY.x, TRAY.y, TRAY.w, TRAY.h, 16);
+  gr = g.createLinearGradient(0, TRAY.y, 0, TRAY.y + TRAY.h); gr.addColorStop(0, '#e0246a'); gr.addColorStop(1, '#8a0b3a');
+  g.fillStyle = gr; g.fill(); g.lineWidth = 3; g.strokeStyle = '#5c0624'; g.stroke();
+  rr(g, TRAY.x + 8, TRAY.y + 16, TRAY.w - 16, TRAY.h - 23, 12);
+  gr = g.createLinearGradient(0, TRAY.y + 16, 0, TRAY.y + TRAY.h); gr.addColorStop(0, '#22030f'); gr.addColorStop(1, '#55102c');
+  g.fillStyle = gr; g.fill();
+  g.fillStyle = '#111'; rr(g, W / 2 - 24, TRAY.y + 3, 48, 15, 6); g.fill();
+  g.fillStyle = chrome(g, W / 2 - 30, 0, W / 2 + 30, 0); rr(g, W / 2 - 30, TRAY.y - 1, 60, 6, 3); g.fill();
+  g.fillStyle = '#ffd6e6'; g.font = `900 11px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'middle';
+  g.fillText('出珠盤', TRAY.x + 14, TRAY.y + 9);
+}
+let traySprite = null;
+function buildSprite() {
+  const px = TR * 2 + 6, c = document.createElement('canvas');
+  c.width = c.height = Math.ceil(px * scale * dpr);
+  const g = c.getContext('2d'); g.scale(c.width / px, c.width / px);
+  drawBall(g, TR + 1, TR + 1, TR); traySprite = c;
+}
+
+/* ---------- 按鈕 ---------- */
+const BTN = [
+  { id: 'ins', x: 66, y: KNOB_Y, r: 32, label: '投珠', c0: '#ffffff', c1: '#8f959e', tc: '#333', act: () => insert() },
+  { id: 'p1', x: 158, y: KNOB_Y, r: 32, label: '+1', c0: '#fff59a', c1: '#e0a800', tc: '#5a3a00', act: () => addBet(1) },
+  { id: 'p10', x: 248, y: KNOB_Y, r: 29, label: '+10', c0: '#a8e6ff', c1: '#1f6fd6', tc: '#fff', act: () => addBet(10) },
+  { id: 'max', x: 334, y: KNOB_Y, r: 27, label: 'MAX', c0: '#ffb3c7', c1: '#c0124a', tc: '#fff', act: () => addBet(MAX_BET) },
+];
+for (const b of BTN) b.press = 0;
+function btnUsable(b) {
+  if (b.id === 'ins') return (state === 'IDLE' && !busyPayout()) || ((state === 'ROLL' || state === 'READY') && bet < MAX_BET && balls > 0) || (state === 'RESULT' && canSkip());
+  return (state === 'IDLE' && balls > 0 && !busyPayout()) || ((state === 'ROLL' || state === 'READY') && bet < MAX_BET && balls > 0) || (state === 'RESULT' && canSkip() && balls > 0);
+}
+function press(id) { const b = BTN.find(v => v.id === id); if (!b) return; b.press = 0.12; b.act(); }
+
+/* ---------- 七段顯示器 ---------- */
+const SEG = { 0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc', 5: 'afgcd', 6: 'afgedc', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg', '-': 'g', ' ': '' };
+function digit(x, y, w, h, ch, on) {
+  const t = Math.max(3, w * 0.2), lit = SEG[ch] || '';
+  const S = {
+    a: [x + t * 0.7, y, w - t * 1.4, t], d: [x + t * 0.7, y + h - t, w - t * 1.4, t], g: [x + t * 0.7, y + h / 2 - t / 2, w - t * 1.4, t],
+    f: [x, y + t * 0.7, t, h / 2 - t], b: [x + w - t, y + t * 0.7, t, h / 2 - t],
+    e: [x, y + h / 2 + t * 0.3, t, h / 2 - t], c: [x + w - t, y + h / 2 + t * 0.3, t, h / 2 - t]
+  };
+  for (const k in S) {
+    const on_ = lit.includes(k);
+    ctx.fillStyle = on_ ? on : 'rgba(255,40,40,0.09)';
+    ctx.shadowBlur = on_ ? 8 : 0; ctx.shadowColor = on;
+    ctx.fillRect(S[k][0], S[k][1], S[k][2], S[k][3]);
+  }
+  ctx.shadowBlur = 0;
+}
+function drawNum(x, y, n, val, dw, dh, gap, col) {
+  const s = val === null ? ''.padStart(n, '-') : String(val).padStart(n, ' ').slice(-n);
+  for (let i = 0; i < n; i++) digit(x + i * (dw + gap), y, dw, dh, s[i], col);
+}
+
+/* ---------- 每幀繪圖 ---------- */
+function render() {
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  if (!bg) buildBg();
+  ctx.drawImage(bg, 0, 0);
+  ctx.setTransform(scale * dpr, 0, 0, scale * dpr, 0, 0);
+
+  // 顯示器數字
+  drawNum(40, 86, 4, Math.min(9999, balls), 24, 31, 8, '#ff3030');
+  drawNum(196, 86, 2, bet || null, 24, 31, 8, '#ffb020');
+  const showM = state === 'ROLL' ? MULTS[rollIdx] : mult;
+  drawNum(292, 86, 2, showM || null, 24, 31, 8, showM ? MCOL[showM] : '#ff3030');
+
+  // 倍率燈
+  for (let i = 0; i < 6; i++) {
+    const m = MULTS[i], x = 48 + i * 58, y = 160;
+    const on = (state === 'ROLL' && rollIdx === i) || (mult === m && state !== 'ROLL');
+    const blink = on && state === 'RESULT' && win > 0 ? (Math.sin(T * 20) > 0) : on;
+    const g = ctx.createRadialGradient(x - 5, y - 6, 2, x, y, 19);
+    if (blink) { g.addColorStop(0, '#ffffff'); g.addColorStop(0.35, '#ff5a5a'); g.addColorStop(1, '#c00000'); ctx.shadowBlur = 22; ctx.shadowColor = '#ff2020'; }
+    else { g.addColorStop(0, '#7a2a2a'); g.addColorStop(1, '#3a0a0a'); }
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(x, y, 18, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    ctx.lineWidth = 2; ctx.strokeStyle = '#1a0000'; ctx.stroke();
+    ctx.fillStyle = blink ? '#fff' : '#b06060'; ctx.font = `900 ${m >= 10 ? 16 : 19}px ${FONT}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(m, x, y + 1);
+  }
+
+  // 出珠盤：盤裡畫幾顆就是有幾顆
+  const n = Math.min(balls, PILE.length), SS = TR * 2 + 6;
+  for (let i = 0; i < n; i++) ctx.drawImage(traySprite, PILE[i].x - TR - 1, PILE[i].y - TR - 1, SS, SS);
+  for (const f of flyers) if (f.kind === 'out') {
+    const k = Math.min(1, f.t / f.dur);
+    ctx.drawImage(traySprite, f.sx + (f.tx - f.sx) * k - TR - 1, f.sy + (f.ty - f.sy) * k * k - TR - 1, SS, SS);
+  }
+  if (balls > PILE.length) {
+    const t = '+' + (balls - PILE.length);
+    ctx.font = `900 13px ${FONT}`; const tw = ctx.measureText(t).width + 14;
+    rr(ctx, TRAY.x + TRAY.w - tw - 12, TRAY.y + 18, tw, 20, 10); ctx.fillStyle = 'rgba(0,0,0,.6)'; ctx.fill();
+    ctx.fillStyle = '#ffe94d'; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t, TRAY.x + TRAY.w - 12 - tw / 2, TRAY.y + 28);
+  }
+  if (pending > 0 || incoming > 0) {
+    ctx.fillStyle = `rgba(255,240,120,${0.5 + 0.5 * Math.sin(T * 14)})`; ctx.font = `900 11px ${FONT}`;
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText('出珠中', W / 2, TRAY.y - 6);
+  }
+
+  // 落袋燈
+  const showLit = state === 'ROLL' ? rollLit : lit, col = state === 'ROLL' ? MCOL[MULTS[rollIdx]] : MCOL[mult];
+  for (let i = 0; i < NP; i++) {
+    const x0 = LEFT_X + PW * i, cx = x0 + PW / 2, on = showLit.has(i);
+    let bright = on;
+    if (state === 'RESULT' && i === hitIdx) bright = Math.sin(T * 18) > 0 || !win;
+    if (on) {
+      const pulse = 0.35 + 0.25 * Math.sin(T * 6 + i);
+      ctx.fillStyle = col; ctx.globalAlpha = state === 'RESULT' && i === hitIdx && win ? (bright ? 0.85 : 0.2) : pulse;
+      ctx.fillRect(x0 + 1.5, POCKET_TOP, PW - 3, FLOOR_Y - POCKET_TOP); ctx.globalAlpha = 1;
+    }
+    const lg = ctx.createRadialGradient(cx - 2, 763, 1, cx, 765, 8);
+    if (on && bright) { lg.addColorStop(0, '#fff'); lg.addColorStop(0.4, col); lg.addColorStop(1, '#300'); ctx.shadowBlur = 14; ctx.shadowColor = col; }
+    else { lg.addColorStop(0, '#a33'); lg.addColorStop(1, '#3a0505'); }
+    ctx.fillStyle = lg; ctx.beginPath(); ctx.arc(cx, 765, 7, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0;
+    if (on && state !== 'ROLL') {
+      ctx.fillStyle = '#fff'; ctx.font = `900 10px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      ctx.lineWidth = 3; ctx.strokeStyle = 'rgba(0,0,0,.6)'; ctx.strokeText('×' + mult, cx, POCKET_TOP + 14); ctx.fillText('×' + mult, cx, POCKET_TOP + 14);
+    }
+  }
+  // 釘子亮光
+  for (const p of pins) if (p.glow > 0) {
+    ctx.globalAlpha = p.glow; ctx.fillStyle = '#fff'; ctx.shadowBlur = 10; ctx.shadowColor = '#fff7b0';
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r + 1, 0, Math.PI * 2); ctx.fill(); ctx.shadowBlur = 0; ctx.globalAlpha = 1;
+  }
+
+  // 拉桿彈簧
+  const headY = PLUNGER_REST + pullVis * 0.3;
+  ctx.strokeStyle = '#9aa0a8'; ctx.lineWidth = 1.6; ctx.beginPath();
+  const sTop = headY + 6, sBot = LANE_BOT, coils = 7;
+  for (let i = 0; i <= coils * 2; i++) { const y = sTop + (sBot - sTop) * i / (coils * 2); ctx.lineTo(i % 2 ? LANE_X + 6 : RIGHT_X - 6, y); }
+  ctx.stroke();
+  ctx.fillStyle = chrome(ctx, LANE_X, 0, RIGHT_X, 0); rr(ctx, LANE_X + 3, headY, RIGHT_X - LANE_X - 6, 7, 2); ctx.fill();
+
+  // 鋼珠
+  if (state !== 'RESULT' || true) drawBall(ctx, ball.x, ball.y, BR);
+
+  // 粒子
+  for (const p of particles) {
+    ctx.globalAlpha = Math.max(0, p.life); ctx.fillStyle = p.col;
+    ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+
+  // 玻璃反光
+  ctx.save(); fieldPath(ctx); ctx.clip();
+  ctx.fillStyle = 'rgba(255,255,255,.10)';
+  ctx.beginPath(); ctx.moveTo(60, 200); ctx.lineTo(130, 200); ctx.lineTo(-40, 880); ctx.lineTo(-110, 880); ctx.fill();
+  ctx.beginPath(); ctx.moveTo(150, 200); ctx.lineTo(170, 200); ctx.lineTo(0, 880); ctx.lineTo(-20, 880); ctx.fill();
+  ctx.restore();
+
+  // 大字
+  if (bigText && bigT < 2.4) {
+    const k = Math.min(1, bigT / 0.25), s = 0.6 + 0.4 * k + 0.05 * Math.sin(bigT * 12);
+    ctx.save(); ctx.translate(225, 470); ctx.scale(s, s); ctx.globalAlpha = bigT > 2 ? (2.4 - bigT) / 0.4 : 1;
+    ctx.font = `900 54px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.lineJoin = 'round';
+    ctx.lineWidth = 12; ctx.strokeStyle = '#fff'; ctx.strokeText(bigText, 0, 0);
+    ctx.lineWidth = 5; ctx.strokeStyle = '#3a0016'; ctx.strokeText(bigText, 0, 0);
+    ctx.fillStyle = bigCol; ctx.fillText(bigText, 0, 0); ctx.restore();
+  }
+
+  // 訊息列
+  rr(ctx, 36, 796, 378, 30, 9); ctx.fillStyle = 'rgba(25,0,20,.82)'; ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = 'rgba(255,255,255,.35)'; ctx.stroke();
+  let mtxt = msg || (state === 'FLY' ? '鋼珠飛行中…' : '');
+  if (state === 'IDLE' && !msg) mtxt = balls > 0 ? '投入小鋼珠開始' : '珠子用完了，按「補珠」領 100 顆';
+  if (mtxt) {
+    let fs = 16; ctx.font = `900 ${fs}px ${FONT}`;
+    while (ctx.measureText(mtxt).width > 360 && fs > 10) { fs--; ctx.font = `900 ${fs}px ${FONT}`; }
+    ctx.fillStyle = msgCol; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    ctx.globalAlpha = msgT < 0.15 ? msgT / 0.15 : 1; ctx.fillText(mtxt, 225, 812); ctx.globalAlpha = 1;
+  }
+
+  // 按鈕
+  for (const b of BTN) {
+    const usable = btnUsable(b), oy = b.press > 0 ? 3 : 0;
+    ctx.fillStyle = '#4a0019'; ctx.beginPath(); ctx.arc(b.x, b.y + 4, b.r + 5, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = chrome(ctx, b.x - b.r, b.y - b.r, b.x + b.r, b.y + b.r); ctx.beginPath(); ctx.arc(b.x, b.y, b.r + 4, 0, Math.PI * 2); ctx.fill();
+    ctx.globalAlpha = usable ? 1 : 0.45;
+    const g = ctx.createRadialGradient(b.x - b.r * 0.35, b.y - b.r * 0.4 + oy, 2, b.x, b.y + oy, b.r);
+    g.addColorStop(0, '#fff'); g.addColorStop(0.25, b.c0); g.addColorStop(1, b.c1);
+    ctx.fillStyle = g; ctx.beginPath(); ctx.arc(b.x, b.y + oy, b.r, 0, Math.PI * 2); ctx.fill();
+    if (usable && b.id === 'ins' && state === 'IDLE') {
+      ctx.strokeStyle = `rgba(255,255,255,${0.4 + 0.4 * Math.sin(T * 5)})`; ctx.lineWidth = 3;
+      ctx.beginPath(); ctx.arc(b.x, b.y + oy, b.r + 1, 0, Math.PI * 2); ctx.stroke();
+    }
+    ctx.fillStyle = b.tc; ctx.font = `900 ${b.label.length > 2 ? 15 : 18}px ${FONT}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+    const label = b.id === 'ins' && state === 'IDLE' && balls <= 0 ? '補珠' : b.label;
+    ctx.fillText(label, b.x, b.y + oy + 1); ctx.globalAlpha = 1;
+  }
+
+  // 拉桿把手
+  const ky = KNOB_Y + pullVis * 0.42;
+  ctx.fillStyle = chrome(ctx, 431, 0, 439, 0); ctx.fillRect(431.5, LANE_BOT + 4, 7, ky - LANE_BOT - 4);
+  ctx.fillStyle = '#4a0019'; ctx.beginPath(); ctx.arc(LANE_CX, KNOB_Y + 4, 27, 0, Math.PI * 2); ctx.fill();
+  const kg = ctx.createRadialGradient(LANE_CX - 7, ky - 8, 2, LANE_CX, ky, 22);
+  kg.addColorStop(0, '#ffffff'); kg.addColorStop(0.4, '#c8ccd2'); kg.addColorStop(1, '#5d636b');
+  ctx.fillStyle = kg; ctx.beginPath(); ctx.arc(LANE_CX, ky, 22, 0, Math.PI * 2); ctx.fill();
+  ctx.lineWidth = 2; ctx.strokeStyle = '#3a3e44'; ctx.stroke();
+  ctx.fillStyle = 'rgba(0,0,0,.25)'; ctx.beginPath(); ctx.arc(LANE_CX, ky, 8, 0, Math.PI * 2); ctx.fill();
+  if (pullVis > 0.5 && (dragging || keyPull)) {
+    const p = pull / PULL_MAX;
+    ctx.lineWidth = 5; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,.35)'; ctx.beginPath(); ctx.arc(LANE_CX, ky, 30, -Math.PI / 2, Math.PI * 1.5); ctx.stroke();
+    ctx.strokeStyle = `hsl(${120 - p * 120},95%,55%)`; ctx.beginPath(); ctx.arc(LANE_CX, ky, 30, -Math.PI / 2, -Math.PI / 2 + Math.PI * 2 * p); ctx.stroke();
+    ctx.fillStyle = '#fff'; ctx.font = `900 11px ${FONT}`; ctx.textAlign = 'center';
+    ctx.fillText(Math.round(p * 100) + '%', LANE_CX, ky - 40);
+  } else if (state === 'READY') {
+    const a = 0.5 + 0.5 * Math.sin(T * 6);
+    ctx.fillStyle = `rgba(255,255,255,${a})`; ctx.font = `900 16px ${FONT}`; ctx.textAlign = 'center'; ctx.fillText('▼', LANE_CX, KNOB_Y + 38);
+  }
+
+  // 投進投珠口的珠
+  for (const f of flyers) if (f.kind === 'in') {
+    const k = Math.max(0, f.t / f.dur), e = k * k * (3 - 2 * k);
+    drawBall(ctx, f.sx + (f.tx - f.sx) * e, f.sy + (f.ty - f.sy) * e - Math.sin(k * Math.PI) * 60, TR + 2 * Math.sin(k * Math.PI));
+  }
+
+  // 音量鈕
+  ctx.fillStyle = 'rgba(122,7,48,.85)'; ctx.beginPath(); ctx.arc(34, 30, 15, 0, Math.PI * 2); ctx.fill();
+  ctx.fillStyle = '#fff'; ctx.beginPath(); ctx.moveTo(26, 26); ctx.lineTo(30, 26); ctx.lineTo(35, 21); ctx.lineTo(35, 39); ctx.lineTo(30, 34); ctx.lineTo(26, 34); ctx.closePath(); ctx.fill();
+  ctx.strokeStyle = '#fff'; ctx.lineWidth = 2;
+  if (muted) { ctx.beginPath(); ctx.moveTo(38, 25); ctx.lineTo(44, 35); ctx.moveTo(44, 25); ctx.lineTo(38, 35); ctx.stroke(); }
+  else { ctx.beginPath(); ctx.arc(36, 30, 6, -0.9, 0.9); ctx.stroke(); }
+}
+function drawBall(c, x, y, r) {
+  c.fillStyle = 'rgba(0,0,0,.28)'; c.beginPath(); c.arc(x + 2, y + 3, r, 0, Math.PI * 2); c.fill();
+  const g = c.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.1, x, y, r);
+  g.addColorStop(0, '#ffffff'); g.addColorStop(0.35, '#dfe3e8'); g.addColorStop(0.75, '#7d838c'); g.addColorStop(1, '#3c4047');
+  c.fillStyle = g; c.beginPath(); c.arc(x, y, r, 0, Math.PI * 2); c.fill();
+}
+
+/* ---------- 輸入 ---------- */
+function toLogical(e) { const r = cv.getBoundingClientRect(); return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale }; }
+let dragId = null;
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); au();
+  const p = toLogical(e);
+  if (Math.hypot(p.x - 34, p.y - 30) < 20) { muted = !muted; return; }
+  if (p.x > 370 && p.x < 460 && p.y > 58 && p.y < 132) { press('ins'); return; }
+  for (const b of BTN) if (Math.hypot(p.x - b.x, p.y - b.y) < b.r + 8) { press(b.id); return; }
+  if (Math.hypot(p.x - LANE_CX, p.y - KNOB_Y) < 44 || (p.x > 395 && p.y > 600 && p.y < 990)) {
+    dragging = true; dragStart = p.y; pull = 0; dragId = e.pointerId;
+    try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  }
+});
+cv.addEventListener('pointermove', e => {
+  if (!dragging || e.pointerId !== dragId) return;
+  e.preventDefault();
+  const p = toLogical(e); pull = Math.max(0, Math.min(PULL_MAX, p.y - dragStart));
+});
+function endDrag(e) { if (dragging && e.pointerId === dragId) { release(); dragId = null; } }
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowDown') { e.preventDefault(); au(); if (!keyPull && !e.repeat) { keyPull = true; pull = 0; } return; }
+  if (e.repeat) return;
+  au();
+  if (e.code === 'KeyZ' || e.code === 'Enter') press('ins');
+  else if (e.code === 'KeyX' || e.code === 'ArrowUp') press('p1');
+  else if (e.code === 'KeyC') press('p10');
+  else if (e.code === 'KeyV') press('max');
+  else if (e.code === 'KeyM') muted = !muted;
+});
+addEventListener('keyup', e => { if ((e.code === 'Space' || e.code === 'ArrowDown') && keyPull) { e.preventDefault(); release(); } });
+
+/* ---------- 尺寸 ---------- */
+function resize() {
+  dpr = Math.min(window.devicePixelRatio || 1, 2);
+  scale = Math.min(innerWidth / W, innerHeight / H);
+  cv.style.width = W * scale + 'px'; cv.style.height = H * scale + 'px';
+  cv.width = Math.round(W * scale * dpr); cv.height = Math.round(H * scale * dpr);
+  bg = null; buildSprite();
+}
+addEventListener('resize', resize);
+resize();
+
+/* ---------- 測試用：離線模擬落點分布 ---------- */
+window.__sim = function (power, n = 50) {
+  const res = {};
+  for (let k = 0; k < n; k++) {
+    const b = { x: LANE_CX, y: BALL_REST, vx: (Math.random() - 0.5) * 8, vy: -launchVel(power), inField: false, still: 0 };
+    let t = 0, r = null;
+    while (t < 20 && !(r = updateBall(b, 1 / 60, false))) t += 1 / 60;
+    const key = r ? (r.type === 'pocket' ? r.idx : r.type) : 'timeout';
+    res[key] = (res[key] || 0) + 1;
+  }
+  return res;
+};
+
+say(balls > 0 ? '投入小鋼珠開始' : '珠子用完了，按「補珠」領 100 顆', '#fff');
+let last = performance.now();
+function frame(now) {
+  const fdt = Math.min(0.033, (now - last) / 1000); last = now;
+  update(fdt); render();
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>

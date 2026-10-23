@@ -1,0 +1,1361 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<title>彈珠戰警 3D</title>
+<style>
+html,body{margin:0;height:100%;overflow:hidden;touch-action:none;-webkit-user-select:none;user-select:none;-webkit-tap-highlight-color:transparent;
+  background:radial-gradient(ellipse at 50% 30%,#6a2f80 0%,#2c1238 55%,#12071a 100%);
+  font-family:"Microsoft JhengHei","PingFang TC","Noto Sans TC","Heiti TC",sans-serif}
+canvas{display:block;touch-action:none}
+#msg{position:fixed;left:50%;top:max(10px,env(safe-area-inset-top));transform:translateX(-50%);max-width:calc(100vw - 120px);
+  padding:8px 18px;border-radius:999px;background:rgba(20,0,24,.78);border:2px solid rgba(255,255,255,.35);color:#fff;font-weight:900;
+  font-size:clamp(13px,3.6vw,18px);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;pointer-events:none;box-shadow:0 4px 18px rgba(0,0,0,.45)}
+.round{position:fixed;top:max(10px,env(safe-area-inset-top));width:42px;height:42px;border-radius:50%;border:2px solid rgba(255,255,255,.4);
+  background:rgba(20,0,24,.72);color:#fff;font-size:18px;cursor:pointer;padding:0}
+#mute{left:10px}
+#camBtn{right:10px}
+#camBtn.on{background:#ff4f93;border-color:#fff}
+#camPanel{position:fixed;left:50%;bottom:max(10px,env(safe-area-inset-bottom));transform:translateX(-50%);width:min(440px,calc(100vw - 20px));
+  box-sizing:border-box;padding:10px 14px 12px;border-radius:16px;background:rgba(20,0,24,.86);border:2px solid rgba(255,255,255,.3);
+  color:#fff;font-size:14px;display:none;box-shadow:0 6px 24px rgba(0,0,0,.5)}
+#camPanel.show{display:block}
+@media (orientation:landscape){
+  #camPanel{left:auto;right:10px;bottom:auto;top:62px;transform:none;width:300px}
+  #camPanel .presets{flex-wrap:wrap}
+  #camPanel .presets button{flex:1 1 30%}
+}
+#camPanel .hint{font-size:12px;opacity:.7;margin-bottom:4px;text-align:center}
+#camPanel .row{display:flex;align-items:center;gap:8px;margin:4px 0}
+#camPanel label{width:64px;flex:none;font-weight:700}
+#camPanel input{flex:1;accent-color:#ff4f93;height:22px}
+#camPanel output{width:44px;text-align:right;font-variant-numeric:tabular-nums;opacity:.85}
+#camPanel .presets{display:flex;gap:6px;margin-top:8px}
+#camPanel button{flex:1;padding:7px 0;border-radius:10px;border:1px solid rgba(255,255,255,.35);background:rgba(255,255,255,.12);color:#fff;
+  font:700 13px inherit;font-family:inherit;cursor:pointer}
+#camPanel #camDone{display:block;width:100%;margin-top:8px;background:#ff4f93;border-color:#fff;font-size:15px}
+#big{position:fixed;left:50%;top:40%;transform:translate(-50%,-50%) scale(0);font-weight:900;font-size:clamp(46px,14vw,104px);color:#ffe94d;
+  -webkit-text-stroke:3px #3a0016;text-shadow:0 0 22px rgba(255,255,255,.9),0 7px 0 #3a0016;pointer-events:none;white-space:nowrap;opacity:0}
+#big.show{animation:pop 2.8s ease-out forwards}
+@keyframes pop{0%{transform:translate(-50%,-50%) scale(.2) rotate(-10deg);opacity:0}
+  12%{transform:translate(-50%,-50%) scale(1.18) rotate(4deg);opacity:1}22%{transform:translate(-50%,-50%) scale(1) rotate(0)}
+  30%{transform:translate(-50%,-50%) scale(1.06)}38%{transform:translate(-50%,-50%) scale(1)}80%{opacity:1}
+  100%{transform:translate(-50%,-64%) scale(1.04);opacity:0}}
+#meter{position:fixed;width:64px;height:64px;margin:-32px 0 0 -32px;border-radius:50%;display:none;pointer-events:none;
+  align-items:center;justify-content:center;color:#fff;font-weight:900;font-size:14px;text-shadow:0 1px 3px #000}
+#meter::before{content:"";position:absolute;inset:9px;border-radius:50%;background:rgba(20,0,24,.75)}
+#meter span{position:relative}
+#keys{position:fixed;right:10px;bottom:8px;color:rgba(255,255,255,.55);font-size:12px;pointer-events:none;display:none}
+#err{position:fixed;inset:0;display:none;align-items:center;justify-content:center;color:#fff;font-size:18px;text-align:center;padding:24px;line-height:1.7}
+</style>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+</head>
+<body>
+<div id="msg"></div>
+<button id="mute" class="round" aria-label="音效開關">🔊</button>
+<button id="camBtn" class="round" aria-label="調整視角">🎥</button>
+<div id="camPanel">
+  <div class="hint">拖曳畫面旋轉・滾輪或雙指縮放・右鍵／Shift／雙指拖曳移動</div>
+  <div class="row"><label>左右角度</label><input id="cYaw" type="range" step="1"><output></output></div>
+  <div class="row"><label>上下角度</label><input id="cEl" type="range" step="1"><output></output></div>
+  <div class="row"><label>遠近</label><input id="cZoom" type="range" step="1"><output></output></div>
+  <div class="row"><label>畫面高低</label><input id="cPy" type="range" step="1"><output></output></div>
+  <div class="row"><label>畫面左右</label><input id="cPx" type="range" step="1"><output></output></div>
+  <div class="presets"><button data-p="def">預設</button><button data-p="front">正面</button><button data-p="top">俯視</button><button data-p="side">側面</button><button data-p="play">近看盤面</button></div>
+  <button id="camDone">完成</button>
+</div>
+<div id="big"></div>
+<div id="meter"><span>0%</span></div>
+<div id="keys">Z 投珠　X +1　C +10　V MAX　按住空白鍵拉桿　M 靜音</div>
+<div id="err">3D 引擎載入失敗。<br>第一次開啟需要連上網路，請確認網路後重新整理。</div>
+<script>
+'use strict';
+if (!window.THREE) { document.getElementById('err').style.display = 'flex'; throw new Error('three.js not loaded'); }
+const V3 = THREE.Vector3;
+/* =========================================================
+   彈珠戰警 3D — 小鋼珠彈珠台模擬
+   投珠 → 抽倍率並亮燈 → 可加碼(最高99) → 拉桿發射 → 落入亮燈格中獎
+   物理在盤面平面上以像素座標計算，畫面用 Three.js 呈現
+   ========================================================= */
+
+/* ---------- 盤面幾何（像素座標） ---------- */
+const BR = 6;
+const AC = { x: 240, y: 420 }, AR = 210;
+const LEFT_X = 30, LANE_X = 420, RIGHT_X = 450;
+const FLOOR_Y = 780, POCKET_TOP = 732, NP = 15, PW = (LANE_X - LEFT_X) / NP;
+const LANE_CX = 435, PLUNGER_REST = 842, BALL_REST = PLUNGER_REST - BR, LANE_BOT = 870;
+const DIV_TOP = 450;
+const GATE_TOP = AC.y - Math.sqrt(AR * AR - (LANE_X - AC.x) ** 2);
+const G = 820, E_PIN = 0.5, E_WALL = 0.4, E_KICK = 0.85;
+const PULL_MAX = 80, VMIN = 860, VMAX = 1140;
+const BOARD_BOT = 872;                         // 盤面下緣（像素）
+
+/* ---------- 規則 ---------- */
+const MULTS = [2, 3, 4, 6, 8, 10];
+const COUNT = { 2: 4, 3: 3, 4: 3, 6: 2, 8: 1, 10: 1 };
+const WEIGHT = { 2: 28, 3: 22, 4: 18, 6: 14, 8: 10, 10: 8 };
+const MCOL = { 2: '#3ddc4a', 3: '#22d3ee', 4: '#3b82f6', 6: '#b45cff', 8: '#ff8a00', 10: '#ff2d55' };
+const MAX_BET = 99;
+
+/* ---------- 碰撞物件 ---------- */
+const segs = [], pins = [];
+function seg(x1, y1, x2, y2, opt) { segs.push(Object.assign({ x1, y1, x2, y2 }, opt || {})); }
+function pin(x, y, r, kind) { pins.push({ x, y, r, kind, glow: 0 }); }
+function segDist(px, py, s) {
+  const ex = s.x2 - s.x1, ey = s.y2 - s.y1;
+  const t = Math.max(0, Math.min(1, ((px - s.x1) * ex + (py - s.y1) * ey) / (ex * ex + ey * ey)));
+  return Math.hypot(px - s.x1 - ex * t, py - s.y1 - ey * t);
+}
+function hash(n) { const s = Math.sin(n * 12.9898) * 43758.5453; return s - Math.floor(s); }
+
+(function buildField() {
+  const AN = 56;
+  for (let i = 0; i < AN; i++) {
+    const a1 = Math.PI + Math.PI * i / AN, a2 = Math.PI + Math.PI * (i + 1) / AN;
+    seg(AC.x + AR * Math.cos(a1), AC.y + AR * Math.sin(a1), AC.x + AR * Math.cos(a2), AC.y + AR * Math.sin(a2), { arc: true });
+  }
+  seg(LEFT_X, AC.y, LEFT_X, FLOOR_Y, { outer: -1 });
+  seg(RIGHT_X, AC.y, RIGHT_X, LANE_BOT + 40, { outer: 1 });
+  seg(LANE_X, DIV_TOP, LANE_X, LANE_BOT + 40, { lane: true });
+  seg(LEFT_X, FLOOR_Y, LANE_X, FLOOR_Y, { floor: true });
+  seg(LANE_X, DIV_TOP, LANE_X, GATE_TOP, { oneWay: true });   // 單向閘：球進盤面後不能回發射道
+  for (let i = 1; i < NP; i++) { const x = LEFT_X + PW * i; seg(x, POCKET_TOP, x, FLOOR_Y, { divider: true }); pin(x, POCKET_TOP, 3.5, 'cap'); }
+  for (const y of [440, 495, 550, 605, 660]) seg(LEFT_X, y, LEFT_X + 14, y + 8, { kicker: true });
+  for (const y of [490, 545, 600, 655]) seg(LANE_X, y, LANE_X - 14, y + 8, { kicker: true });
+  seg(LEFT_X, 704, LEFT_X + 8, 709, { kicker: true });          // 底部小踢板，避免兩側邊格吃太多珠
+  seg(LANE_X, 704, LANE_X - 8, 709, { kicker: true });
+  for (const x of [120, 172, 224, 276, 328]) pin(x, 290, 4.5, 'post');
+  for (let j = 0, y = 330; y <= 700; j++, y += 26) {
+    const off = (j % 2) * 14;
+    for (let x = 48 + off; x <= 398; x += 28) {
+      if (y < AC.y + 10 && Math.hypot(x - AC.x, y - AC.y) > AR - 26) continue;
+      if (hash(j * 31 + x) < 0.16) continue;
+      // 與踢板保持至少一顆珠的間隙，避免卡珠
+      if (segs.some(s => s.kicker && segDist(x, y, s) < 3 + BR * 2 + 1)) continue;
+      pin(x, y, 3, 'nail');
+    }
+  }
+})();
+
+/* ---------- 物理 ---------- */
+function collideCircle(b, cx, cy, cr, e) {
+  const dx = b.x - cx, dy = b.y - cy, rr = cr + BR, d2 = dx * dx + dy * dy;
+  if (d2 >= rr * rr || d2 === 0) return 0;
+  const d = Math.sqrt(d2), nx = dx / d, ny = dy / d;
+  b.x = cx + nx * rr; b.y = cy + ny * rr;
+  const vn = b.vx * nx + b.vy * ny;
+  if (vn >= 0) return 0;
+  const tx = -ny, ty = nx, vt = b.vx * tx + b.vy * ty;
+  const ee = -vn < 25 ? 0 : e;
+  const f = 1 - Math.min(0.12, -vn / 8000);
+  const nvn = -vn * ee, nvt = vt * f;
+  b.vx = nx * nvn + tx * nvt; b.vy = ny * nvn + ty * nvt;
+  return -vn;
+}
+function collideSeg(b, s, e) {
+  const ex = s.x2 - s.x1, ey = s.y2 - s.y1, L2 = ex * ex + ey * ey;
+  let t = ((b.x - s.x1) * ex + (b.y - s.y1) * ey) / L2;
+  t = t < 0 ? 0 : t > 1 ? 1 : t;
+  return collideCircle(b, s.x1 + ex * t, s.y1 + ey * t, 0, e);
+}
+function physStep(b, dt, fx) {
+  b.vy += G * dt;
+  b.x += b.vx * dt; b.y += b.vy * dt;
+  for (const s of segs) {
+    if (s.oneWay && !b.inField) continue;
+    if (b.x < Math.min(s.x1, s.x2) - BR - 1 || b.x > Math.max(s.x1, s.x2) + BR + 1 ||
+        b.y < Math.min(s.y1, s.y2) - BR - 1 || b.y > Math.max(s.y1, s.y2) + BR + 1) continue;
+    const imp = collideSeg(b, s, s.kicker ? E_KICK : E_WALL);
+    if (fx && imp > 80) sfx.wall(imp);
+  }
+  for (const p of pins) {
+    const dx = b.x - p.x, dy = b.y - p.y, rr = p.r + BR;
+    if (dx > rr || dx < -rr || dy > rr || dy < -rr) continue;
+    const imp = collideCircle(b, p.x, p.y, p.r, E_PIN);
+    if (imp > 40) {
+      b.vx += (Math.random() - 0.5) * imp * 0.12;     // 釘子微小誤差，讓落點更分散
+      if (fx) { p.glow = 1; sfx.ding(imp); }
+    }
+  }
+  if (!b.inField && b.x < LANE_X - BR - 1) b.inField = true;
+}
+// 回傳事件：pocket / back / oob / null
+function updateBall(b, fdt, fx) {
+  const n = Math.max(10, Math.ceil(fdt * 900)), dt = fdt / n;
+  for (let i = 0; i < n; i++) {
+    physStep(b, dt, fx);
+    if (b.inField && b.y > FLOOR_Y - BR - 4 && b.x > LEFT_X && b.x < LANE_X)
+      return { type: 'pocket', idx: Math.min(NP - 1, Math.max(0, Math.floor((b.x - LEFT_X) / PW))) };
+    if (!b.inField && b.x > LANE_X && b.vy > 0 && b.y >= BALL_REST) return { type: 'back' };
+    if (b.y > 1000 || b.x < 0 || b.x > 480 || b.y < 0) return { type: 'oob' };
+  }
+  const sp = Math.hypot(b.vx, b.vy);
+  if (sp < 25) { b.still += fdt; if (b.still > 1.2) { b.vx += (Math.random() - 0.5) * 240; b.vy -= 120; b.still = 0; } }
+  else b.still = 0;
+  return null;
+}
+function launchVel(p) { return VMIN + p * (VMAX - VMIN) + (Math.random() - 0.5) * 30; }
+
+/* ---------- 音效 ---------- */
+let actx = null, master = null, muted = false, lastDing = 0, lastCount = 0, lastCoin = 0, nbuf = null;
+function au() {
+  try {
+    if (!actx) {
+      actx = new (window.AudioContext || window.webkitAudioContext)();
+      master = actx.createGain(); master.gain.value = 0.8; master.connect(actx.destination);
+      nbuf = actx.createBuffer(1, actx.sampleRate * 2, actx.sampleRate);
+      const d = nbuf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    }
+    if (actx.state === 'suspended') actx.resume();
+  } catch (e) {}
+}
+function aok() { return actx && !muted; }
+function tone(f, dur, type = 'sine', vol = 0.2, to = 0, delay = 0) {
+  if (!aok()) return;
+  const t = actx.currentTime + delay, o = actx.createOscillator(), g = actx.createGain();
+  o.type = type; o.frequency.setValueAtTime(f, t);
+  if (to) o.frequency.exponentialRampToValueAtTime(to, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.004);
+  g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); g.connect(master); o.start(t); o.stop(t + dur + 0.03);
+}
+function noise(dur, vol = 0.2, freq = 1500, q = 1, delay = 0) {
+  if (!aok()) return;
+  const t = actx.currentTime + delay, s = actx.createBufferSource(), f = actx.createBiquadFilter(), g = actx.createGain();
+  s.buffer = nbuf; f.type = 'bandpass'; f.frequency.value = freq; f.Q.value = q;
+  g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(f); f.connect(g); g.connect(master); s.start(t, Math.random() * 1.5); s.stop(t + dur + 0.02);
+}
+const sfx = {
+  ding(imp) { if (!aok()) return; const t = actx.currentTime; if (t - lastDing < 0.02) return; lastDing = t;
+    const v = Math.min(0.16, 0.02 + imp / 4000), f = 2600 + Math.random() * 1600;
+    tone(f, 0.12, 'sine', v); tone(f * 1.5, 0.06, 'triangle', v * 0.3); },
+  wall(imp) { if (!aok()) return; const t = actx.currentTime; if (t - lastDing < 0.03) return; lastDing = t;
+    noise(0.04, Math.min(0.15, imp / 3000), 3500, 3); },
+  tick() { tone(1100, 0.04, 'square', 0.05); },
+  lit() { [784, 988, 1175, 1568].forEach((f, i) => tone(f, 0.15, 'square', 0.07, 0, i * 0.07)); },
+  ratchet() { noise(0.02, 0.08, 2500, 4); tone(600, 0.02, 'square', 0.03); },
+  spring() { tone(180, 0.15, 'sawtooth', 0.06, 90); noise(0.08, 0.1, 800, 1); },
+  launch(p) { noise(0.12, 0.25, 600, 0.8); tone(140, 0.18, 'sine', 0.25, 60); tone(900, 0.25, 'triangle', 0.05 * (1 + p), 2400); },
+  win(m) { const seq = m >= 8 ? [523, 659, 784, 1047, 784, 1047, 1319, 1568] : [523, 659, 784, 1047, 1319];
+    seq.forEach((f, i) => { tone(f, 0.18, 'square', 0.07, 0, i * 0.09); tone(f * 2, 0.12, 'sine', 0.04, 0, i * 0.09); }); },
+  lose() { tone(440, 0.18, 'square', 0.05); tone(330, 0.3, 'square', 0.05, 0, 0.16); },
+  drop() { tone(320, 0.12, 'sine', 0.2, 160); noise(0.06, 0.12, 1200, 2); },
+  deny() { tone(200, 0.12, 'square', 0.05); },
+  back() { tone(250, 0.2, 'triangle', 0.08, 150); },
+  clink() { if (!aok()) return; const t = actx.currentTime; if (t - lastCount < 0.03) return; lastCount = t;
+    const f = 3000 + Math.random() * 1800; tone(f, 0.07, 'sine', 0.07); tone(f * 0.62, 0.05, 'triangle', 0.03); },
+  coin() { if (!aok()) return; const t = actx.currentTime; if (t - lastCoin < 0.05) return; lastCoin = t;
+    tone(2600, 0.08, 'sine', 0.08); noise(0.03, 0.06, 5000, 2); },
+  popper() { noise(0.18, 0.35, 900, 0.7); tone(220, 0.12, 'sine', 0.2, 80); noise(0.4, 0.06, 6000, 1, 0.05); },
+  // 群眾歡呼：濾波噪音模擬人聲＋「哇～」母音＋掌聲＋口哨
+  cheer(power) {
+    if (!aok()) return;
+    const t0 = actx.currentTime + 0.05, dur = 2.2 + power * 2;
+    const vol = 0.05 + power * 0.05;
+    for (let i = 0; i < 9; i++) {
+      const s = actx.createBufferSource(); s.buffer = nbuf; s.loop = true;
+      const bp = actx.createBiquadFilter(); bp.type = 'bandpass';
+      const f0 = 450 + Math.random() * 900; bp.frequency.setValueAtTime(f0, t0); bp.frequency.linearRampToValueAtTime(f0 * 1.35, t0 + 0.6);
+      bp.frequency.linearRampToValueAtTime(f0, t0 + dur); bp.Q.value = 3 + Math.random() * 5;
+      const g = actx.createGain(), am = actx.createGain(), lfo = actx.createOscillator(), lg = actx.createGain();
+      lfo.frequency.value = 3 + Math.random() * 6; lg.gain.value = 0.5; lfo.connect(lg); lg.connect(am.gain); am.gain.value = 0.7;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.linearRampToValueAtTime(vol, t0 + 0.2 + Math.random() * 0.3);
+      g.gain.setValueAtTime(vol, t0 + dur * 0.55); g.gain.exponentialRampToValueAtTime(0.0001, t0 + dur);
+      s.connect(bp); bp.connect(am); am.connect(g); g.connect(master);
+      s.start(t0, Math.random() * 1.5); s.stop(t0 + dur + 0.1); lfo.start(t0); lfo.stop(t0 + dur + 0.1);
+    }
+    const voices = 5 + Math.round(power * 5);
+    for (let i = 0; i < voices; i++) {
+      const st = t0 + Math.random() * 0.5, vd = 0.8 + Math.random() * 0.9;
+      const o = actx.createOscillator(); o.type = 'sawtooth';
+      const p0 = 190 + Math.random() * 230;
+      o.frequency.setValueAtTime(p0, st); o.frequency.linearRampToValueAtTime(p0 * 1.45, st + vd * 0.35); o.frequency.linearRampToValueAtTime(p0 * 1.1, st + vd);
+      const vib = actx.createOscillator(), vg = actx.createGain(); vib.frequency.value = 5 + Math.random() * 2; vg.gain.value = p0 * 0.03;
+      vib.connect(vg); vg.connect(o.frequency);
+      const g = actx.createGain(); g.gain.setValueAtTime(0.0001, st); g.gain.linearRampToValueAtTime(0.025 + power * 0.015, st + 0.08);
+      g.gain.exponentialRampToValueAtTime(0.0001, st + vd);
+      for (const [ff, qq, gg] of [[750, 8, 1], [1200, 9, 0.6], [2600, 10, 0.25]]) {
+        const bp = actx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = ff * (0.9 + Math.random() * 0.2); bp.Q.value = qq;
+        const fg = actx.createGain(); fg.gain.value = gg; o.connect(bp); bp.connect(fg); fg.connect(g);
+      }
+      g.connect(master); o.start(st); o.stop(st + vd + 0.05); vib.start(st); vib.stop(st + vd + 0.05);
+    }
+    const claps = Math.round(dur * (35 + power * 50));
+    for (let i = 0; i < claps; i++)
+      noise(0.025 + Math.random() * 0.02, 0.025 + Math.random() * 0.05, 1200 + Math.random() * 2500, 0.9, 0.15 + Math.random() * dur * 0.85);
+    const wh = power >= 0.8 ? 3 : power >= 0.4 ? 2 : 1;
+    for (let i = 0; i < wh; i++) {
+      const st = 0.25 + i * 0.55 + Math.random() * 0.2;
+      tone(1700 + Math.random() * 300, 0.25, 'sine', 0.045, 2900, st);
+      tone(2900, 0.35, 'sine', 0.04, 2100, st + 0.25);
+    }
+  }
+};
+function vib(ms) { try { navigator.vibrate && navigator.vibrate(ms); } catch (e) {} }
+
+/* ---------- 出珠盤（3D 堆疊位置，單位：公尺級場景單位） ---------- */
+const TRAY_IN = { w: 4.2, d: 0.92 };
+const TR3 = 0.052;
+const PILE3 = [];                              // 由出珠口附近往外、往上堆成小山
+(function buildPile() {
+  const r = TR3, dz = r * Math.sqrt(3), dy = r * 2 * Math.sqrt(2 / 3);
+  for (let L = 0; L < 5; L++) {
+    const ox = (L % 2) * r, oz = (L % 2) * dz / 3;
+    for (let iz = 0; ; iz++) {
+      const z = -TRAY_IN.d / 2 + r + iz * dz + oz; if (z > TRAY_IN.d / 2 - r) break;
+      for (let ix = 0; ; ix++) {
+        const x = -TRAY_IN.w / 2 + r + ix * 2 * r + (iz % 2) * r + ox; if (x > TRAY_IN.w / 2 - r) break;
+        const dist = Math.hypot(x * 0.9, (z + 0.38) * 1.5);
+        PILE3.push({ x, y: r + L * dy, z, s: L * 0.5 + dist + Math.sin(x * 13 + z * 7 + L) * 0.04 });
+      }
+    }
+  }
+  PILE3.sort((a, b) => a.s - b.s);
+})();
+
+/* ---------- 遊戲狀態 ---------- */
+function loadBalls() { try { const v = parseInt(localStorage.getItem('dzzj_balls'), 10); return isNaN(v) ? 100 : v; } catch (e) { return 100; } }
+function save() { try { localStorage.setItem('dzzj_balls', String(balls + pending + incoming)); } catch (e) {} }
+
+let balls = loadBalls();                       // 出珠盤裡的鋼珠
+let pending = 0, incoming = 0, hopAcc = 0, doneT = 0;
+let bet = 0, mult = 0, lit = new Set(), state = 'IDLE';      // IDLE ROLL READY FLY RESULT
+let rollT = 0, rollNext = 0, rollIdx = 0, targetIdx = 0, rollLit = new Set();
+let resT = 0, win = 0, hitIdx = -1;
+let pull = 0, pullVis = 0, dragging = false, dragStart = 0, keyPull = false, lastRatchet = 0;
+const ball = { x: LANE_CX, y: BALL_REST, vx: 0, vy: 0, inField: false, still: 0 };
+const flyers = [];
+let T = 0;
+
+const msgEl = document.getElementById('msg');
+function say(t, c) { msgEl.textContent = t || '　'; msgEl.style.color = c || '#fff'; }
+function resetBall() { ball.x = LANE_CX; ball.y = BALL_REST; ball.vx = ball.vy = 0; ball.inField = false; ball.still = 0; }
+function shuffleLit(k) {
+  const a = [...Array(NP).keys()];
+  for (let i = a.length - 1; i > 0; i--) { const j = Math.random() * (i + 1) | 0; [a[i], a[j]] = [a[j], a[i]]; }
+  return new Set(a.slice(0, k));
+}
+// 亮燈格平均分散：等距排列再隨機整體旋轉，每一格被點亮的機率相同
+const MIN_GAP = { 1: 0, 2: 5, 3: 4, 4: 3 };
+function spreadLit(k) {
+  const z = NP / k;
+  for (let tries = 0; tries < 30; tries++) {
+    const off = Math.random() * NP, jit = tries < 29 ? 0.9 : 0;
+    const a = [...Array(k).keys()].map(i => ((Math.floor(off + i * z + (Math.random() * 2 - 1) * jit)) % NP + NP) % NP).sort((x, y) => x - y);
+    const gaps = a.map((v, i) => (i ? v - a[i - 1] : v + NP - a[k - 1]));
+    if (k === 1 || gaps.every(g => g >= MIN_GAP[k])) return new Set(a);
+  }
+}
+function drawMult() {
+  let tot = 0; for (const m of MULTS) tot += WEIGHT[m];
+  let r = Math.random() * tot;
+  for (const m of MULTS) { r -= WEIGHT[m]; if (r < 0) return m; }
+  return 2;
+}
+function startRoll() {
+  state = 'ROLL'; rollT = 0; rollNext = 0; rollIdx = Math.random() * 6 | 0;
+  targetIdx = MULTS.indexOf(drawMult());
+  say('倍率抽選中…', '#ffe94d');
+}
+function busyPayout() { return pending > 0 || incoming > 0; }
+function canSkip() { return resT > 0.5 && !busyPayout(); }
+function randomTopSlot() { return { x: (Math.random() - 0.5) * TRAY_IN.w * 0.8, y: TR3 * 9, z: (Math.random() - 0.5) * TRAY_IN.d * 0.6 }; }
+// 從出珠盤拿珠，飛進投珠口
+function takeBalls(n) {
+  for (let i = 0; i < n; i++) {
+    balls--;
+    const slot = PILE3[balls] || randomTopSlot();
+    const from = trayGroup.localToWorld(new V3(slot.x, slot.y, slot.z));
+    flyers.push({ kind: 'in', from, t: -Math.min(i, 40) * 0.03, dur: 0.6 });
+  }
+  save();
+}
+// 退珠器吐出一顆珠，掉進出珠盤
+function spawnOut() {
+  const slot = PILE3[balls + incoming] || randomTopSlot();
+  incoming++;
+  const sx = (Math.random() - 0.5) * 0.12, sz = -TRAY_IN.d / 2 + 0.02;
+  flyers.push({ kind: 'out', sx, sy: 0.4, sz, tx: slot.x, ty: slot.y, tz: slot.z, t: 0,
+    dur: 0.22 + Math.hypot(slot.x - sx, slot.z - sz) * 0.16 + (0.4 - slot.y) * 0.3 });
+}
+function insert() {
+  if (state === 'RESULT') { if (canSkip()) endRound(); else return; }
+  if (state === 'IDLE') {
+    if (busyPayout()) { say('出珠中，請稍候', '#fc6'); return; }
+    if (balls <= 0) { pending += 100; save(); say('補充 100 顆小鋼珠！', '#8ff'); return; }
+    takeBalls(1); bet = 1; startRoll(); return;
+  }
+  if (state === 'ROLL' || state === 'READY') addBet(1);
+}
+function addBet(n) {
+  if (state === 'RESULT') { if (canSkip()) endRound(); else return; }
+  if (state === 'IDLE') {
+    if (busyPayout()) { say('出珠中，請稍候', '#fc6'); return; }
+    if (balls <= 0) { sfx.deny(); say('珠子用完了，按「補珠」領 100 顆', '#fc6'); return; }
+    insert(); n -= 1; if (n <= 0) return;
+  }
+  if (state !== 'ROLL' && state !== 'READY') return;
+  const add = Math.min(n, MAX_BET - bet, balls);
+  if (add <= 0) { sfx.deny(); say(bet >= MAX_BET ? '已達最高押注 99 顆' : '珠子不夠了', '#fc6'); return; }
+  takeBalls(add); bet += add;
+  if (state === 'READY') say(`押注 ${bet} 顆 × ${mult} 倍，拉桿發射！`, '#fff');
+}
+function release() {
+  const p = pull / PULL_MAX; pull = 0; dragging = false; keyPull = false;
+  if (p < 0.06) return;
+  if (state !== 'READY') {
+    sfx.spring();
+    if (state === 'IDLE') say('請先投入小鋼珠', '#fc6');
+    else if (state === 'ROLL') say('倍率抽選中，請稍候', '#fc6');
+    return;
+  }
+  ball.vx = (Math.random() - 0.5) * 8; ball.vy = -launchVel(p);
+  ball.inField = false; ball.still = 0;
+  state = 'FLY'; sfx.launch(p); vib(15); say('鋼珠飛行中…', '#fff');
+}
+function onBallEvent(r) {
+  if (r.type === 'pocket') {
+    state = 'RESULT'; resT = 0; doneT = 0; hitIdx = r.idx;
+    ball.y = FLOOR_Y - BR; ball.x = LEFT_X + PW * (r.idx + 0.5); ball.vx = ball.vy = 0;
+    sfx.drop();
+    if (lit.has(r.idx)) {
+      win = bet * mult; pending += win; save();
+      celebrate(mult);
+      say(`★ 中獎！押 ${bet} × ${mult} 倍 = ${win} 顆 ★`, MCOL[mult]);
+    } else {
+      win = 0; setTimeout(() => sfx.lose(), 150);
+      say(`第 ${r.idx + 1} 格沒亮燈，再接再厲！`, '#ddd');
+    }
+  } else {
+    state = 'READY'; resetBall(); sfx.back();
+    say('力道不夠，球滾回來了，再拉一次', '#fc6');
+  }
+}
+function endRound() {
+  state = 'IDLE'; bet = 0; mult = 0; lit = new Set(); hitIdx = -1; win = 0; resetBall();
+  say(balls > 0 ? '投入小鋼珠開始下一局' : '珠子用完了，按「補珠」領 100 顆', '#fff');
+}
+const POWER = { 2: 0.2, 3: 0.3, 4: 0.45, 6: 0.6, 8: 0.85, 10: 1 };
+const bigEl = document.getElementById('big');
+function celebrate(m) {
+  const pw = POWER[m];
+  setTimeout(() => sfx.win(m), 150); setTimeout(() => sfx.cheer(pw), 250);
+  vib(m >= 8 ? [40, 50, 40, 50, 120] : [30, 40, 60]);
+  confettiBurst(Math.round(160 + pw * 520), pw);
+  if (m >= 8) setTimeout(() => confettiBurst(260, pw), 700);
+  bigEl.textContent = m >= 8 ? `大獎 ×${m}` : `中獎 ×${m}`;
+  bigEl.style.color = MCOL[m];
+  bigEl.classList.remove('show'); void bigEl.offsetWidth; bigEl.classList.add('show');
+}
+
+/* ---------- 更新 ---------- */
+function update(fdt) {
+  T += fdt;
+  if (keyPull) pull = Math.min(PULL_MAX, pull + PULL_MAX * fdt / 1.0);
+  if (keyPull || dragging) {
+    pullVis = pull;
+    if (Math.abs(pull - lastRatchet) >= 10) { lastRatchet = Math.round(pull / 10) * 10; sfx.ratchet(); }
+  } else { pullVis = Math.max(0, pullVis - fdt * 1400); lastRatchet = 0; }
+
+  if (state === 'ROLL') {
+    rollT += fdt;
+    if (rollT >= rollNext) {
+      if (rollT > 1.3 && rollIdx === targetIdx) {
+        mult = MULTS[targetIdx]; lit = spreadLit(COUNT[mult]); state = 'READY'; sfx.lit();
+        say(`× ${mult} 倍！亮 ${lit.size} 格 — 可加碼，拉桿發射`, MCOL[mult]);
+      } else {
+        rollIdx = (rollIdx + 1) % 6; sfx.tick();
+        rollLit = spreadLit(COUNT[MULTS[rollIdx]]);
+        rollNext = rollT + 0.045 + rollT * 0.09;
+      }
+    }
+  }
+  if (state === 'FLY') {
+    const r = updateBall(ball, fdt, true);
+    if (r) onBallEvent(r);
+  } else if (state !== 'RESULT') {
+    ball.x = LANE_CX; ball.y = BALL_REST + pullVis * 0.3;
+  }
+  if (state === 'RESULT') {
+    resT += fdt;
+    if (!busyPayout() && resT > 1.2) { doneT += fdt; if (doneT > (win ? 1.2 : 0.4)) endRound(); }
+  }
+  // 退珠器：待退越多吐得越快
+  if (pending > 0) {
+    hopAcc += Math.min(150, Math.max(18, pending / 2)) * fdt;
+    while (hopAcc >= 1 && pending > 0) { hopAcc--; pending--; spawnOut(); }
+  } else hopAcc = 0;
+  for (let i = flyers.length - 1; i >= 0; i--) {
+    const f = flyers[i]; f.t += fdt;
+    if (f.t >= f.dur) {
+      flyers.splice(i, 1);
+      if (f.kind === 'out') { incoming--; balls++; save(); sfx.clink(); }
+      else sfx.coin();
+    }
+  }
+  for (const p of pins) if (p.glow > 0) p.glow = Math.max(0, p.glow - fdt * 4);
+  for (const b of BTN) b.press = Math.max(0, b.press - fdt);
+}
+
+/* ---------- 2D 繪圖工具（貼圖用） ---------- */
+const FONT = '"Microsoft JhengHei","PingFang TC","Noto Sans TC","Heiti TC",sans-serif';
+const RB = ['#ff3b3b', '#ff9f1a', '#ffe11a', '#3ddc4a', '#1fa2ff', '#4b3bff', '#c13bff'];
+function rr(c, x, y, w, h, r) {
+  c.beginPath(); c.moveTo(x + r, y); c.arcTo(x + w, y, x + w, y + h, r); c.arcTo(x + w, y + h, x, y + h, r);
+  c.arcTo(x, y + h, x, y, r); c.arcTo(x, y, x + w, y, r); c.closePath();
+}
+function rainbow(c, x, y, w, h, sw = 5) {
+  c.save(); c.beginPath(); c.rect(x, y, w, h); c.clip();
+  const n = Math.ceil((w + h) / sw) + 2;
+  for (let i = 0; i < n; i++) {
+    const o = x - h + i * sw; c.fillStyle = RB[i % 7];
+    c.beginPath(); c.moveTo(o, y + h); c.lineTo(o + sw, y + h); c.lineTo(o + sw + h, y); c.lineTo(o + h, y); c.closePath(); c.fill();
+  }
+  c.restore();
+}
+function fieldPath(c) {
+  c.beginPath(); c.moveTo(LEFT_X, FLOOR_Y); c.lineTo(LEFT_X, AC.y);
+  c.arc(AC.x, AC.y, AR, Math.PI, Math.PI * 2);
+  c.lineTo(RIGHT_X, BOARD_BOT); c.lineTo(LANE_X, BOARD_BOT); c.lineTo(LANE_X, FLOOR_Y); c.closePath();
+}
+function chrome2d(c, x0, y0, x1, y1) {
+  const g = c.createLinearGradient(x0, y0, x1, y1);
+  g.addColorStop(0, '#fafafa'); g.addColorStop(0.45, '#b9bec6'); g.addColorStop(0.55, '#8d939c'); g.addColorStop(1, '#e8eaee');
+  return g;
+}
+function titleText(c, x, y, size) {
+  c.save(); c.font = `900 ${size}px ${FONT}`; c.textAlign = 'center'; c.textBaseline = 'middle'; c.lineJoin = 'round';
+  c.lineWidth = size * 0.22; c.strokeStyle = '#ffffff'; c.strokeText('彈珠戰警', x, y);
+  c.lineWidth = size * 0.1; c.strokeStyle = '#1d5a12'; c.strokeText('彈珠戰警', x, y);
+  const g = c.createLinearGradient(0, y - size / 2, 0, y + size / 2);
+  g.addColorStop(0, '#b6f26b'); g.addColorStop(0.5, '#4caf25'); g.addColorStop(1, '#2d7a14');
+  c.fillStyle = g; c.fillText('彈珠戰警', x, y);
+  const w = c.measureText('彈珠戰警').width;
+  for (let i = 0; i < 4; i++) {
+    const bx = x - w / 2 + w * (i + 0.5) / 4 + size * 0.22, by = y - size * 0.32;
+    const bg2 = c.createRadialGradient(bx - 2, by - 2, 1, bx, by, size * 0.14);
+    bg2.addColorStop(0, '#fff'); bg2.addColorStop(1, '#7ec8ff');
+    c.fillStyle = bg2; c.beginPath(); c.arc(bx, by, size * 0.13, 0, Math.PI * 2); c.fill();
+  }
+  c.restore();
+}
+// 原創 Q 版戰警頭像
+function mascot(c, x, y, s, col, wink) {
+  c.save(); c.translate(x, y); c.scale(s, s); c.lineWidth = 3; c.strokeStyle = '#1a1a1a'; c.lineJoin = 'round';
+  c.fillStyle = col; c.beginPath(); c.arc(0, 0, 40, Math.PI, 0); c.lineTo(42, 14); c.quadraticCurveTo(0, 34, -42, 14); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = '#ffffff'; c.beginPath(); c.moveTo(-6, -40); c.lineTo(6, -40); c.lineTo(4, 0); c.lineTo(-4, 0); c.closePath(); c.fill();
+  c.fillStyle = '#ffd400'; c.beginPath(); c.moveTo(-26, -34); c.lineTo(0, -12); c.lineTo(26, -34); c.lineTo(32, -26); c.lineTo(0, 2); c.lineTo(-32, -26); c.closePath(); c.fill(); c.stroke();
+  c.fillStyle = '#ffe2c4'; c.beginPath(); c.ellipse(0, 24, 27, 20, 0, 0, Math.PI * 2); c.fill(); c.stroke();
+  c.fillStyle = '#2aa8ff'; rr(c, -32, 2, 64, 17, 8); c.fill(); c.stroke();
+  c.fillStyle = 'rgba(255,255,255,.85)'; rr(c, -26, 5, 18, 5, 2.5); c.fill();
+  c.fillStyle = '#1a1a1a';
+  c.beginPath(); c.arc(-10, 30, 3.2, 0, Math.PI * 2); c.fill();
+  if (wink) { c.beginPath(); c.moveTo(6, 30); c.lineTo(14, 28); c.stroke(); }
+  else { c.beginPath(); c.arc(10, 30, 3.2, 0, Math.PI * 2); c.fill(); }
+  c.beginPath(); c.arc(0, 36, 6, 0.15 * Math.PI, 0.85 * Math.PI); c.stroke();
+  c.fillStyle = '#ff8fa3'; c.beginPath(); c.arc(-18, 36, 4, 0, Math.PI * 2); c.arc(18, 36, 4, 0, Math.PI * 2); c.fill();
+  c.restore();
+}
+const SEG7 = { 0: 'abcdef', 1: 'bc', 2: 'abged', 3: 'abgcd', 4: 'fgbc', 5: 'afgcd', 6: 'afgedc', 7: 'abc', 8: 'abcdefg', 9: 'abcdfg', '-': 'g', ' ': '' };
+function digit(c, x, y, w, h, ch, on) {
+  const t = Math.max(3, w * 0.2), lit7 = SEG7[ch] || '';
+  const S7 = {
+    a: [x + t * 0.7, y, w - t * 1.4, t], d: [x + t * 0.7, y + h - t, w - t * 1.4, t], g: [x + t * 0.7, y + h / 2 - t / 2, w - t * 1.4, t],
+    f: [x, y + t * 0.7, t, h / 2 - t], b: [x + w - t, y + t * 0.7, t, h / 2 - t],
+    e: [x, y + h / 2 + t * 0.3, t, h / 2 - t], c: [x + w - t, y + h / 2 + t * 0.3, t, h / 2 - t]
+  };
+  for (const k in S7) {
+    const on_ = lit7.includes(k);
+    c.fillStyle = on_ ? on : 'rgba(255,40,40,0.09)'; c.shadowBlur = on_ ? 8 : 0; c.shadowColor = on;
+    c.fillRect(S7[k][0], S7[k][1], S7[k][2], S7[k][3]);
+  }
+  c.shadowBlur = 0;
+}
+function drawNum(c, x, y, n, val, dw, dh, gap, col) {
+  const s = val === null ? ''.padStart(n, '-') : String(val).padStart(n, ' ').slice(-n);
+  for (let i = 0; i < n; i++) digit(c, x + i * (dw + gap), y, dw, dh, s[i], col);
+}
+function makeCanvas(w, h) { const c = document.createElement('canvas'); c.width = w; c.height = h; return c; }
+
+/* ---------- 盤面印刷圖（不含釘子與牆，那些是 3D 物件） ---------- */
+const KB = 2;
+const boardCanvas = makeCanvas(448 * KB, 672 * KB);
+(function drawBoardArt() {
+  const g = boardCanvas.getContext('2d'); g.setTransform(KB, 0, 0, KB, -16 * KB, -200 * KB);
+  rr(g, 16, 200, 448, 672, 12); g.fillStyle = '#16123a'; g.fill();
+  g.fillStyle = '#f7a1c4'; g.fillRect(22, 204, 436, 668);
+  g.save(); fieldPath(g); g.clip();
+  let gr = g.createRadialGradient(225, 500, 20, 225, 500, 380); gr.addColorStop(0, '#fffbb0'); gr.addColorStop(0.6, '#ffe93a'); gr.addColorStop(1, '#ffc400');
+  g.fillStyle = gr; g.fillRect(0, 180, 480, 720);
+  for (let i = 0; i < 32; i++) {
+    const a = i / 32 * Math.PI * 2; g.fillStyle = 'rgba(255,140,0,.13)';
+    g.beginPath(); g.moveTo(225, 500); g.arc(225, 500, 600, a, a + Math.PI / 32); g.closePath(); g.fill();
+  }
+  g.strokeStyle = 'rgba(255,255,255,.5)'; g.lineWidth = 2;
+  for (const r of [70, 130, 200]) { g.beginPath(); g.arc(225, 500, r, 0, Math.PI * 2); g.stroke(); }
+  titleText(g, 225, 250, 40);
+  mascot(g, 130, 475, 0.95, '#e53935', false);
+  mascot(g, 318, 470, 0.95, '#1e88e5', true);
+  mascot(g, 224, 585, 1.15, '#ffffff', false);
+  gr = g.createLinearGradient(0, POCKET_TOP, 0, FLOOR_Y); gr.addColorStop(0, 'rgba(60,0,30,.18)'); gr.addColorStop(1, 'rgba(60,0,30,.5)');
+  g.fillStyle = gr; g.fillRect(LEFT_X, POCKET_TOP - 4, LANE_X - LEFT_X, FLOOR_Y - POCKET_TOP + 4);
+  g.fillStyle = 'rgba(80,0,40,.22)'; g.fillRect(LANE_X, DIV_TOP, RIGHT_X - LANE_X, BOARD_BOT - DIV_TOP);
+  g.restore();
+  g.save(); g.beginPath(); g.rect(22, FLOOR_Y + 6, LANE_X - 22, BOARD_BOT - FLOOR_Y - 6); g.clip();
+  g.translate(22, FLOOR_Y + 6); g.rotate(-0.06); rainbow(g, -10, 30, LANE_X + 20, 24, 7); g.restore();
+  g.fillStyle = 'rgba(122,7,48,.85)'; g.font = `900 15px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('純屬娛樂．虛擬鋼珠不可兌換', 225, 800);
+})();
+
+/* ---------- 上方面板（動態貼圖） ---------- */
+const KP = 2.2;
+const panelCanvas = makeCanvas(Math.round(452 * KP), Math.round(190 * KP));
+let panelSig = '';
+function drawPanel() {
+  const g = panelCanvas.getContext('2d'); g.setTransform(KP, 0, 0, KP, -14 * KP, -6 * KP);
+  rr(g, 14, 6, 452, 190, 14); let gr = g.createRadialGradient(240, 100, 10, 240, 100, 260);
+  gr.addColorStop(0, '#fff7a8'); gr.addColorStop(0.55, '#ffb3d1'); gr.addColorStop(1, '#ff4f93');
+  g.fillStyle = gr; g.fill();
+  g.save(); rr(g, 14, 6, 452, 190, 14); g.clip();
+  for (let i = 0; i < 28; i++) {
+    const a = i / 28 * Math.PI * 2; g.fillStyle = i % 2 ? 'rgba(255,255,255,.18)' : 'rgba(255,200,0,.12)';
+    g.beginPath(); g.moveTo(240, 100); g.arc(240, 100, 420, a, a + Math.PI / 28); g.closePath(); g.fill();
+  }
+  g.restore();
+  titleText(g, 220, 34, 38);
+  const box = (x, w, label) => {
+    rr(g, x - 3, 65, w + 6, 59, 9); g.fillStyle = '#7a0730'; g.fill();
+    rr(g, x, 68, w, 53, 7); g.fillStyle = '#120006'; g.fill();
+    g.fillStyle = '#ffd6e6'; g.font = `900 12px ${FONT}`; g.textAlign = 'left'; g.textBaseline = 'alphabetic'; g.fillText(label, x + 6, 81);
+  };
+  box(26, 142, '珠數'); box(182, 82, '押注'); box(278, 82, '倍率');
+  drawNum(g, 40, 86, 4, Math.min(9999, balls), 24, 31, 8, '#ff3030');
+  drawNum(g, 196, 86, 2, bet || null, 24, 31, 8, '#ffb020');
+  const showM = state === 'ROLL' ? MULTS[rollIdx] : mult;
+  drawNum(g, 292, 86, 2, showM || null, 24, 31, 8, showM ? MCOL[showM] : '#ff3030');
+  for (let i = 0; i < 6; i++) {
+    const m = MULTS[i], x = 48 + i * 58, y = 160, on = lampOn(i);
+    g.fillStyle = '#5a0020'; g.beginPath(); g.arc(x, y, 22, 0, Math.PI * 2); g.fill();
+    const lg = g.createRadialGradient(x - 5, y - 6, 2, x, y, 19);
+    if (on) { lg.addColorStop(0, '#ffffff'); lg.addColorStop(0.35, '#ff5a5a'); lg.addColorStop(1, '#c00000'); }
+    else { lg.addColorStop(0, '#7a2a2a'); lg.addColorStop(1, '#3a0a0a'); }
+    g.fillStyle = lg; g.beginPath(); g.arc(x, y, 18, 0, Math.PI * 2); g.fill();
+    g.lineWidth = 2; g.strokeStyle = '#1a0000'; g.stroke();
+    g.fillStyle = on ? '#fff' : '#b06060'; g.font = `900 ${m >= 10 ? 16 : 19}px ${FONT}`;
+    g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(m, x, y + 1);
+  }
+  g.save(); g.translate(418, 160); g.rotate(-0.08); g.fillStyle = '#7a0730'; g.font = `900 15px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('純屬娛樂', 0, -9); g.font = `700 10px ${FONT}`; g.fillText('虛擬鋼珠不可兌換', 0, 9); g.restore();
+  g.fillStyle = '#7a0730'; g.font = `900 12px ${FONT}`; g.textAlign = 'center'; g.fillText('投珠口', 415, 135);
+  g.lineWidth = 3; g.strokeStyle = '#7a0730'; rr(g, 15.5, 7.5, 449, 187, 13); g.stroke();
+}
+function lampOn(i) {
+  const on = (state === 'ROLL' && rollIdx === i) || (mult === MULTS[i] && state !== 'ROLL');
+  return on && state === 'RESULT' && win > 0 ? Math.sin(T * 20) > 0 : on;
+}
+
+/* ---------- 落袋燈（動態貼圖） ---------- */
+const KO = 2, OV = { x: 30, y: 726, w: 390, h: 60 };
+const pocketCanvas = makeCanvas(OV.w * KO, OV.h * KO);
+function drawPockets() {
+  const g = pocketCanvas.getContext('2d');
+  g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, pocketCanvas.width, pocketCanvas.height);
+  g.setTransform(KO, 0, 0, KO, -OV.x * KO, -OV.y * KO);
+  const showLit = state === 'ROLL' ? rollLit : lit, col = state === 'ROLL' ? MCOL[MULTS[rollIdx]] : MCOL[mult];
+  for (let i = 0; i < NP; i++) {
+    const x0 = LEFT_X + PW * i, cx = x0 + PW / 2, on = showLit.has(i);
+    let bright = on;
+    if (state === 'RESULT' && i === hitIdx) bright = Math.sin(T * 18) > 0 || !win;
+    if (on) {
+      g.fillStyle = col; g.globalAlpha = state === 'RESULT' && i === hitIdx && win ? (bright ? 0.9 : 0.25) : 0.4 + 0.25 * Math.sin(T * 6 + i);
+      g.fillRect(x0 + 1.5, POCKET_TOP, PW - 3, FLOOR_Y - POCKET_TOP); g.globalAlpha = 1;
+    }
+    const lg = g.createRadialGradient(cx - 2, 763, 1, cx, 765, 8);
+    if (on && bright) { lg.addColorStop(0, '#fff'); lg.addColorStop(0.4, col); lg.addColorStop(1, '#300'); }
+    else { lg.addColorStop(0, '#a33'); lg.addColorStop(1, '#3a0505'); }
+    g.fillStyle = lg; g.beginPath(); g.arc(cx, 765, 7, 0, Math.PI * 2); g.fill();
+    if (on && state !== 'ROLL') {
+      g.fillStyle = '#fff'; g.font = `900 10px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+      g.lineWidth = 3; g.strokeStyle = 'rgba(0,0,0,.6)'; g.strokeText('×' + mult, cx, POCKET_TOP + 14); g.fillText('×' + mult, cx, POCKET_TOP + 14);
+    }
+    pocketGlow[i].visible = on && bright;
+    if (on) pocketGlow[i].material.color.set(col);
+  }
+}
+
+/* ---------- 下方操作面板貼圖 ---------- */
+const KF = 2;
+const frontCanvas = makeCanvas(452 * KF, 116 * KF);
+(function drawFront() {
+  const g = frontCanvas.getContext('2d'); g.setTransform(KF, 0, 0, KF, -14 * KF, -876 * KF);
+  const gr = g.createLinearGradient(0, 876, 0, 992); gr.addColorStop(0, '#f0377c'); gr.addColorStop(1, '#a80c42');
+  g.fillStyle = gr; g.fillRect(14, 876, 452, 116);
+  g.fillStyle = '#ffe1ec'; g.font = `900 13px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle';
+  g.fillText('投 珠', 66, 893); g.fillText('加 碼', 245, 893); g.fillText('拉 桿', 435, 893);
+  g.fillStyle = 'rgba(255,225,236,.6)'; g.font = `700 9px ${FONT}`;
+  g.fillText('Z', 66, 982); g.fillText('X', 158, 982); g.fillText('C', 248, 982); g.fillText('V', 334, 982); g.fillText('空白鍵 / 往下拖', 420, 984);
+})();
+
+function rainbowTex(rep) {
+  const c = makeCanvas(128, 128), g = c.getContext('2d'); rainbow(g, 0, 0, 128, 128, 128 / 14);
+  const t = new THREE.CanvasTexture(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(rep, rep); t.encoding = THREE.sRGBEncoding; return t;
+}
+function glowTex() {
+  const c = makeCanvas(64, 64), g = c.getContext('2d'), gr = g.createRadialGradient(32, 32, 0, 32, 32, 32);
+  gr.addColorStop(0, 'rgba(255,255,255,1)'); gr.addColorStop(0.25, 'rgba(255,255,255,.55)'); gr.addColorStop(1, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
+}
+function labelTex(text, tc, size) {
+  const c = makeCanvas(128, 128), g = c.getContext('2d');
+  g.fillStyle = tc; g.font = `900 ${size}px ${FONT}`; g.textAlign = 'center'; g.textBaseline = 'middle'; g.fillText(text, 64, 68);
+  const t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; return t;
+}
+function canvasTex(c) { const t = new THREE.CanvasTexture(c); t.encoding = THREE.sRGBEncoding; return t; }
+
+/* =========================================================
+   3D 場景
+   ========================================================= */
+const S = 0.01;                                // 1 像素 = 0.01 場景單位
+const isTouch = matchMedia('(pointer:coarse)').matches;
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+renderer.outputEncoding = THREE.sRGBEncoding;
+renderer.toneMapping = THREE.NoToneMapping;
+renderer.shadowMap.enabled = true; renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.prepend(renderer.domElement);
+const cv = renderer.domElement;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+const ANISO = renderer.capabilities.getMaxAnisotropy();
+
+// 環境反射（給金屬珠與鍍鉻用）
+(function buildEnv() {
+  const env = new THREE.Scene();
+  env.add(new THREE.Mesh(new THREE.BoxGeometry(30, 30, 30), new THREE.MeshBasicMaterial({ color: 0x2a1830, side: THREE.BackSide })));
+  const panel = (color, w, h, x, y, z) => {
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(w, h), new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+    m.position.set(x, y, z); m.lookAt(0, 0, 0); env.add(m);
+  };
+  panel(0xffffff, 12, 4, 0, 10, 2); panel(0xff7ab0, 4, 8, -10, 3, 0); panel(0xffe08a, 4, 8, 10, 3, 0);
+  panel(0xffffff, 8, 2.5, 0, 5, 10); panel(0x88aaff, 6, 3, 0, 4, -10);
+  const pm = new THREE.PMREMGenerator(renderer);
+  scene.environment = pm.fromScene(env, 0.03).texture;
+})();
+
+scene.add(new THREE.HemisphereLight(0xffffff, 0x442233, 0.55));
+const key = new THREE.DirectionalLight(0xffffff, 0.95);
+key.position.set(-3.5, 10, 5); key.castShadow = true;
+key.shadow.mapSize.set(isTouch ? 1024 : 2048, isTouch ? 1024 : 2048);
+Object.assign(key.shadow.camera, { left: -6, right: 6, top: 7.5, bottom: -7.5, near: 1, far: 40 });
+key.shadow.bias = -0.0004; key.shadow.normalBias = 0.02;
+scene.add(key); scene.add(key.target); key.target.position.set(0, 0.5, -2.5);
+const fillL = new THREE.PointLight(0xffd6f0, 0.45, 25); fillL.position.set(4, 5, 5); scene.add(fillL);
+
+const M = {
+  body: new THREE.MeshStandardMaterial({ color: 0xd0145a, roughness: 0.42, metalness: 0.05 }),
+  dark: new THREE.MeshStandardMaterial({ color: 0x2a0614, roughness: 0.8 }),
+  chrome: new THREE.MeshStandardMaterial({ color: 0xeef0f4, roughness: 0.12, metalness: 1 }),
+  brass: new THREE.MeshStandardMaterial({ color: 0xe0b040, roughness: 0.28, metalness: 1 }),
+  orange: new THREE.MeshStandardMaterial({ color: 0xff7a1a, roughness: 0.3, metalness: 0.2 }),
+  red: new THREE.MeshStandardMaterial({ color: 0xe01b1b, roughness: 0.25, metalness: 0.2 }),
+  steel: new THREE.MeshStandardMaterial({ color: 0xf2f3f6, roughness: 0.07, metalness: 1 }),
+  acrylic: new THREE.MeshStandardMaterial({ color: 0xa8ff40, roughness: 0.1, metalness: 0, transparent: true, opacity: 0.55, emissive: 0x4a8a00, emissiveIntensity: 0.35 }),
+  rainbow: new THREE.MeshStandardMaterial({ map: rainbowTex(3), roughness: 0.35 }),
+  rainbowS: new THREE.MeshStandardMaterial({ map: rainbowTex(1), roughness: 0.35 }),
+};
+for (const k of ['steel', 'brass', 'chrome']) M[k].envMapIntensity = 1.2;
+
+const machine = new THREE.Group(); scene.add(machine);
+const THETA = 24 * Math.PI / 180;              // 盤面傾斜角
+const board = new THREE.Group(); board.rotation.x = -(Math.PI / 2 - THETA); machine.add(board);
+function bl(x, y, z) { return new V3((x - 240) * S, (BOARD_BOT - y) * S, z); }   // 像素座標 → 盤面座標
+const BOARD_LEN = (BOARD_BOT - 200) * S;
+
+// 盤面印刷
+const boardTex = canvasTex(boardCanvas); boardTex.anisotropy = ANISO;
+const boardArt = new THREE.Mesh(new THREE.PlaneGeometry(4.48, BOARD_LEN),
+  new THREE.MeshStandardMaterial({ map: boardTex, roughness: 0.55, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+boardArt.position.set(0, BOARD_LEN / 2, 0.003); boardArt.receiveShadow = true; board.add(boardArt);
+// 落袋燈
+const pocketTex = canvasTex(pocketCanvas);
+const pocketPlane = new THREE.Mesh(new THREE.PlaneGeometry(OV.w * S, OV.h * S),
+  new THREE.MeshBasicMaterial({ map: pocketTex, transparent: true, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -4 }));
+pocketPlane.position.copy(bl(OV.x + OV.w / 2, OV.y + OV.h / 2, 0.005)); board.add(pocketPlane);
+const GLOW = glowTex();
+const pocketGlow = [];
+for (let i = 0; i < NP; i++) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  sp.position.copy(bl(LEFT_X + PW * (i + 0.5), 760, 0.06)); sp.scale.setScalar(0.42); sp.visible = false; board.add(sp); pocketGlow.push(sp);
+}
+
+// 釘子
+const WHITE = new THREE.Color(1, 1, 1), tmpC = new THREE.Color(), O3 = new THREE.Object3D();
+const pinMeshes = [];
+function makePins(kind, rad, h, mat, headR, headMat) {
+  const list = pins.filter(p => p.kind === kind);
+  const geo = new THREE.CylinderGeometry(rad * S, rad * S, h, 12); geo.rotateX(Math.PI / 2); geo.translate(0, 0, h / 2);
+  const m = new THREE.InstancedMesh(geo, mat, list.length);
+  let hm = null;
+  if (headR) {
+    const hg = new THREE.SphereGeometry(headR * S, 12, 8); hg.scale(1, 1, 0.6); hg.translate(0, 0, h);
+    hm = new THREE.InstancedMesh(hg, headMat || mat, list.length); hm.castShadow = true; board.add(hm);
+  }
+  list.forEach((p, i) => {
+    O3.position.copy(bl(p.x, p.y, 0)); O3.updateMatrix();
+    m.setMatrixAt(i, O3.matrix); m.setColorAt(i, WHITE);
+    if (hm) { hm.setMatrixAt(i, O3.matrix); hm.setColorAt(i, WHITE); }
+    p.mesh = m; p.idx = i;
+  });
+  m.castShadow = true; board.add(m); pinMeshes.push(m); return m;
+}
+makePins('nail', 2.6, 0.17, M.brass, 4.2);
+makePins('post', 4.5, 0.2, M.orange, 6, M.orange);
+makePins('cap', 3, 0.17, M.red, 5, M.red);
+
+// 牆、軌道、隔板、踢板
+const walls = { chrome: [], acrylic: [] };
+function wall(type, x1, y1, x2, y2, th, h) { walls[type].push({ x1, y1, x2, y2, th, h }); }
+for (const s of segs) {
+  if (s.arc) {
+    const mx = (s.x1 + s.x2) / 2 - AC.x, my = (s.y1 + s.y2) / 2 - AC.y, d = Math.hypot(mx, my), ox = mx / d * 3.5, oy = my / d * 3.5;
+    wall('chrome', s.x1 + ox, s.y1 + oy, s.x2 + ox, s.y2 + oy, 7, 0.3);
+  } else if (s.outer) wall('chrome', s.x1 + s.outer * 3.5, s.y1, s.x2 + s.outer * 3.5, Math.min(s.y2, BOARD_BOT), 7, 0.3);
+  else if (s.floor) wall('chrome', s.x1 - 3.5, s.y1 + 3, s.x2, s.y2 + 3, 6, 0.2);
+  else if (s.lane) wall('acrylic', s.x1, s.y1, s.x2, BOARD_BOT, 4, 0.28);
+  else if (s.oneWay) wall('acrylic', s.x1, s.y1, s.x2, s.y2, 3, 0.28);
+  else if (s.divider) wall('acrylic', s.x1, s.y1, s.x2, s.y2, 3, 0.16);
+  else if (s.kicker) wall('chrome', s.x1, s.y1, s.x2, s.y2, 4, 0.18);
+}
+for (const type in walls) {
+  const list = walls[type], geo = new THREE.BoxGeometry(1, 1, 1); geo.translate(0, 0, 0.5);
+  const m = new THREE.InstancedMesh(geo, M[type], list.length);
+  list.forEach((w, i) => {
+    const dx = w.x2 - w.x1, dy = w.y2 - w.y1, len = Math.hypot(dx, dy) + (type === 'chrome' ? 1.5 : 0);
+    O3.position.copy(bl((w.x1 + w.x2) / 2, (w.y1 + w.y2) / 2, 0));
+    O3.rotation.set(0, 0, Math.atan2(-dy, dx)); O3.scale.set(len * S, w.th * S, w.h); O3.updateMatrix();
+    m.setMatrixAt(i, O3.matrix);
+  });
+  O3.rotation.set(0, 0, 0); O3.scale.set(1, 1, 1);
+  m.castShadow = type === 'chrome'; m.receiveShadow = true; board.add(m);
+}
+
+// 玻璃與反光
+const glass = new THREE.Mesh(new THREE.PlaneGeometry(4.48, BOARD_LEN),
+  new THREE.MeshStandardMaterial({ color: 0xffffff, transparent: true, opacity: 0.07, roughness: 0.02, metalness: 0.4, depthWrite: false }));
+glass.position.set(0, BOARD_LEN / 2, 0.36); board.add(glass);
+(function glare() {
+  const c = makeCanvas(256, 384), g = c.getContext('2d');
+  g.fillStyle = 'rgba(255,255,255,.55)';
+  g.beginPath(); g.moveTo(40, 0); g.lineTo(90, 0); g.lineTo(-30, 384); g.lineTo(-80, 384); g.fill();
+  g.fillStyle = 'rgba(255,255,255,.3)';
+  g.beginPath(); g.moveTo(110, 0); g.lineTo(122, 0); g.lineTo(2, 384); g.lineTo(-10, 384); g.fill();
+  const m = new THREE.Mesh(new THREE.PlaneGeometry(4.48, BOARD_LEN), new THREE.MeshBasicMaterial({ map: new THREE.CanvasTexture(c), transparent: true, opacity: 0.16, blending: THREE.AdditiveBlending, depthWrite: false }));
+  m.position.set(0, BOARD_LEN / 2, 0.361); board.add(m);
+})();
+
+// 鋼珠
+const ballMesh = new THREE.Mesh(new THREE.SphereGeometry(BR * S, 32, 20), M.steel);
+ballMesh.castShadow = true; board.add(ballMesh);
+
+// 發射器（盤面上的彈簧與擊錘）
+const head = new THREE.Mesh(new THREE.BoxGeometry(0.24, 0.06, 0.12), M.chrome); head.castShadow = true; board.add(head);
+const coils = [];
+for (let i = 0; i < 5; i++) {
+  const c = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.008, 6, 16), M.chrome); c.rotation.x = Math.PI / 2; board.add(c); coils.push(c);
+}
+
+/* ---------- 上方面板 ---------- */
+board.updateMatrixWorld(true);
+const boardTop = board.localToWorld(new V3(0, BOARD_LEN, 0));
+const backbox = new THREE.Group(); backbox.position.copy(boardTop); backbox.rotation.x = -0.22; machine.add(backbox);
+(function buildBackbox() {
+  const body = new THREE.Mesh(new THREE.BoxGeometry(4.86, 2.12, 0.62), M.body); body.position.set(0, 1.04, -0.32);
+  body.castShadow = body.receiveShadow = true; backbox.add(body);
+  for (const sx of [-1, 1]) {
+    const trim = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.16, 0.66), M.rainbow); trim.position.set(sx * 2.46, 1.04, -0.32); backbox.add(trim);
+  }
+})();
+const panelTex = canvasTex(panelCanvas); panelTex.anisotropy = ANISO;
+const panelMesh = new THREE.Mesh(new THREE.PlaneGeometry(4.52, 1.9),
+  new THREE.MeshStandardMaterial({ map: panelTex, emissive: 0xffffff, emissiveMap: panelTex, emissiveIntensity: 0.32, roughness: 0.45 }));
+panelMesh.position.set(0, 1.03, 0.002); backbox.add(panelMesh);
+function pl(x, y, z) { return new V3((x - 240) * S, 1.98 - (y - 6) * S, z); }     // 面板像素 → 面板座標
+const lampGlow = [];
+for (let i = 0; i < 6; i++) {
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: GLOW, color: 0xff3030, blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
+  sp.position.copy(pl(48 + i * 58, 160, 0.05)); sp.scale.setScalar(0.62); sp.visible = false; backbox.add(sp); lampGlow.push(sp);
+}
+// 投珠口（立體）
+const slotMech = new THREE.Group(); slotMech.position.copy(pl(415, 92, 0)); slotMech.userData.id = 'slot'; backbox.add(slotMech);
+(function () {
+  const plate = new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.64, 0.14), M.chrome); plate.position.z = 0.07; plate.castShadow = true; slotMech.add(plate);
+  const hole = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.34, 0.06), M.dark); hole.position.set(0, 0.04, 0.13); slotMech.add(hole);
+  const cup = new THREE.Mesh(new THREE.TorusGeometry(0.14, 0.025, 8, 24), M.chrome); cup.position.set(0, 0.04, 0.15); cup.scale.y = 1.6; slotMech.add(cup);
+})();
+backbox.updateMatrixWorld(true);
+const slotWorld = slotMech.localToWorld(new V3(0, 0.05, 0.2));
+
+/* ---------- 下方操作面板 ---------- */
+const front = new THREE.Group(); front.rotation.x = -0.8; machine.add(front);
+function fl(x, y, z) { return new V3((x - 240) * S, -(y - 876) * S, z); }
+const frontTex = canvasTex(frontCanvas); frontTex.anisotropy = ANISO;
+const frontMesh = new THREE.Mesh(new THREE.PlaneGeometry(4.52, 1.16),
+  new THREE.MeshStandardMaterial({ map: frontTex, roughness: 0.4, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -2 }));
+frontMesh.position.set(0, -0.58, 0.003); frontMesh.receiveShadow = true; front.add(frontMesh);
+const BTN = [
+  { id: 'ins', x: 66, r: 32, label: '投珠', col: 0xdfe3e8, tc: '#333', act: () => insert() },
+  { id: 'p1', x: 158, r: 32, label: '+1', col: 0xffd21a, tc: '#5a3a00', act: () => addBet(1) },
+  { id: 'p10', x: 248, r: 29, label: '+10', col: 0x2f8cf0, tc: '#fff', act: () => addBet(10) },
+  { id: 'max', x: 334, r: 27, label: 'MAX', col: 0xe8215f, tc: '#fff', act: () => addBet(MAX_BET) },
+];
+const clickables = [slotMech];
+for (const b of BTN) {
+  b.press = 0;
+  const g = new THREE.Group(); g.position.copy(fl(b.x, 938, 0)); g.userData.id = b.id; front.add(g);
+  const r = b.r * S;
+  const ringG = new THREE.CylinderGeometry(r + 0.06, r + 0.07, 0.07, 32); ringG.rotateX(Math.PI / 2); ringG.translate(0, 0, 0.035);
+  const ring = new THREE.Mesh(ringG, M.chrome); ring.castShadow = true; g.add(ring);
+  const capG = new THREE.CylinderGeometry(r, r * 0.98, 0.12, 32); capG.rotateX(Math.PI / 2); capG.translate(0, 0, 0.06);
+  b.mat = new THREE.MeshStandardMaterial({ color: b.col, roughness: 0.25, metalness: 0.1, emissive: b.col, emissiveIntensity: 0 });
+  const cap = new THREE.Mesh(capG, b.mat); cap.castShadow = true; g.add(cap);
+  const lab = new THREE.Mesh(new THREE.CircleGeometry(r * 0.95, 32), new THREE.MeshBasicMaterial({ map: labelTex(b.label, b.tc, b.label.length > 2 ? 40 : 52), transparent: true }));
+  lab.position.z = 0.122; cap.add(lab);
+  b.cap = cap; b.lab = lab; b.base = b.col;
+  if (b.id === 'ins') b.labRefill = labelTex('補珠', b.tc, 52), b.labNorm = lab.material.map;
+  clickables.push(g);
+}
+// 拉桿把手
+const knob = new THREE.Group(); knob.userData.id = 'knob'; front.add(knob);
+const knobBall = new THREE.Mesh(new THREE.SphereGeometry(0.21, 32, 20), new THREE.MeshStandardMaterial({ color: 0xf0f2f5, roughness: 0.12, metalness: 1, emissive: 0xffffff, emissiveIntensity: 0 }));
+knobBall.castShadow = true; knob.add(knobBall);
+const rodG = new THREE.CylinderGeometry(0.035, 0.035, 1, 12); rodG.translate(0, 0.5, 0);
+const rod = new THREE.Mesh(rodG, M.chrome); front.add(rod);
+const knobBase = new THREE.Mesh(new THREE.TorusGeometry(0.26, 0.04, 10, 32), M.chrome); knobBase.position.copy(fl(LANE_CX, 938, 0.02)); front.add(knobBase);
+clickables.push(knob);
+const KNOB0 = fl(LANE_CX, 938, 0.2);
+
+/* ---------- 出珠盤 ---------- */
+front.updateMatrixWorld(true);
+const fp = front.localToWorld(new V3(0, -1.16, 0));
+const trayGroup = new THREE.Group(); trayGroup.position.set(0, fp.y - 0.46, fp.z + 0.56); machine.add(trayGroup);
+const TRAY_BOT = fp.y - 0.52, FLOORY = TRAY_BOT - 1.05;
+(function buildTray() {
+  const hw = TRAY_IN.w / 2, hd = TRAY_IN.d / 2, wt = 0.08, wh = 0.36;
+  const box = (w, h, d, x, y, z, mat) => { const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat); m.position.set(x, y, z); m.castShadow = m.receiveShadow = true; trayGroup.add(m); };
+  box(TRAY_IN.w + wt * 2, 0.06, TRAY_IN.d + wt * 2, 0, -0.03, 0, M.body);
+  box(TRAY_IN.w + wt * 2, wh, wt, 0, wh / 2, hd + wt / 2, M.body);
+  box(TRAY_IN.w + wt * 2, wh + 0.12, wt, 0, (wh + 0.12) / 2, -hd - wt / 2, M.body);
+  box(wt, wh, TRAY_IN.d, -hw - wt / 2, wh / 2, 0, M.body);
+  box(wt, wh, TRAY_IN.d, hw + wt / 2, wh / 2, 0, M.body);
+  const lip = new THREE.Mesh(new THREE.BoxGeometry(TRAY_IN.w + wt * 2 + 0.02, 0.05, wt + 0.02), M.rainbow); lip.position.set(0, wh, hd + wt / 2); trayGroup.add(lip);
+  const felt = new THREE.Mesh(new THREE.PlaneGeometry(TRAY_IN.w, TRAY_IN.d), new THREE.MeshStandardMaterial({ color: 0x3a0a1e, roughness: 0.9 }));
+  felt.rotation.x = -Math.PI / 2; felt.position.y = 0.001; felt.receiveShadow = true; trayGroup.add(felt);
+  const chute = new THREE.Mesh(new THREE.BoxGeometry(0.56, 0.2, 0.2), M.dark); chute.position.set(0, 0.42, -hd + 0.02); trayGroup.add(chute);
+  const chuteLip = new THREE.Mesh(new THREE.BoxGeometry(0.64, 0.05, 0.24), M.chrome); chuteLip.position.set(0, 0.54, -hd + 0.03); trayGroup.add(chuteLip);
+})();
+const PILE_CAP = PILE3.length;
+const ballGeoS = new THREE.SphereGeometry(TR3, 14, 10);
+const pileMesh = new THREE.InstancedMesh(ballGeoS, M.steel, PILE_CAP);
+PILE3.forEach((p, i) => { O3.position.set(p.x, p.y, p.z); O3.updateMatrix(); pileMesh.setMatrixAt(i, O3.matrix); });
+pileMesh.castShadow = true; pileMesh.receiveShadow = true; trayGroup.add(pileMesh);
+const outMesh = new THREE.InstancedMesh(ballGeoS, M.steel, 300); outMesh.count = 0; trayGroup.add(outMesh);
+const inMesh = new THREE.InstancedMesh(ballGeoS, M.steel, 120); inMesh.count = 0; scene.add(inMesh);
+
+/* ---------- 機身（側面輪廓擠出） ---------- */
+function profileMesh(pts, depth, x, mat) {
+  const sh = new THREE.Shape(); sh.moveTo(pts[0][0], pts[0][1]); for (let i = 1; i < pts.length; i++) sh.lineTo(pts[i][0], pts[i][1]);
+  const geo = new THREE.ExtrudeGeometry(sh, { depth, bevelEnabled: false }); geo.rotateY(-Math.PI / 2);
+  const m = new THREE.Mesh(geo, mat); m.position.x = x; m.castShadow = m.receiveShadow = true; machine.add(m); return m;
+}
+const trayFrontZ = fp.z + 0.56 + TRAY_IN.d / 2 + 0.08;
+profileMesh([[trayFrontZ, FLOORY], [trayFrontZ, TRAY_BOT], [fp.z, TRAY_BOT], [fp.z, fp.y], [0, 0], [boardTop.z, boardTop.y], [boardTop.z, FLOORY]], 4.5, 2.25, M.body);
+for (const sx of [-1, 1]) {
+  profileMesh([[trayFrontZ + 0.02, FLOORY], [trayFrontZ + 0.02, TRAY_BOT + 0.42], [fp.z, fp.y + 0.38], [0, 0.42], [boardTop.z, boardTop.y + 0.42], [boardTop.z, FLOORY]],
+    0.2, sx < 0 ? -2.24 : 2.44, M.rainbowS);
+}
+// 地板
+(function floor() {
+  const c = makeCanvas(512, 512), g = c.getContext('2d');
+  g.fillStyle = '#e8e2d8'; g.fillRect(0, 0, 512, 512);
+  g.strokeStyle = '#bdb4a6'; g.lineWidth = 4;
+  for (let i = 0; i <= 512; i += 128) { g.beginPath(); g.moveTo(i, 0); g.lineTo(i, 512); g.stroke(); g.beginPath(); g.moveTo(0, i); g.lineTo(512, i); g.stroke(); }
+  const t = canvasTex(c); t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(7, 7); t.anisotropy = ANISO;
+  const a = makeCanvas(256, 256), ag = a.getContext('2d'), gr = ag.createRadialGradient(128, 128, 30, 128, 128, 128);
+  gr.addColorStop(0, '#fff'); gr.addColorStop(0.6, '#888'); gr.addColorStop(1, '#000'); ag.fillStyle = gr; ag.fillRect(0, 0, 256, 256);
+  const m = new THREE.Mesh(new THREE.CircleGeometry(9, 48), new THREE.MeshStandardMaterial({ map: t, alphaMap: new THREE.CanvasTexture(a), transparent: true, roughness: 0.6 }));
+  m.rotation.x = -Math.PI / 2; m.position.set(0, FLOORY, -2.2); m.receiveShadow = true; scene.add(m);
+})();
+
+/* ---------- 彩帶與紙花 ---------- */
+const CONF_N = 800, STRM_N = 70;
+const PALETTE = ['#ff3b3b', '#ff9f1a', '#ffe11a', '#3ddc4a', '#1fa2ff', '#7b5cff', '#ff4fb8', '#ffffff', '#ffd700'];
+function makeParticles(n, w, h) {
+  const geo = new THREE.PlaneGeometry(w, h);
+  const m = new THREE.InstancedMesh(geo, new THREE.MeshBasicMaterial({ side: THREE.DoubleSide }), n);
+  const list = [];
+  for (let i = 0; i < n; i++) {
+    m.setColorAt(i, tmpC.set(PALETTE[i % PALETTE.length]));
+    list.push({ alive: false, p: new V3(), v: new V3(), r: new THREE.Euler(), w: new V3(), life: 0, ph: Math.random() * 6.28 });
+    O3.scale.setScalar(0); O3.updateMatrix(); m.setMatrixAt(i, O3.matrix);
+  }
+  O3.scale.setScalar(1);
+  m.frustumCulled = false; scene.add(m);
+  return { m, list, next: 0 };
+}
+const confetti = makeParticles(CONF_N, 0.1, 0.15);
+const streamers = makeParticles(STRM_N, 0.055, 0.9);
+let confActive = false;
+function emit(sys, origin, dir, spread, speed) {
+  const q = sys.list[sys.next]; sys.next = (sys.next + 1) % sys.list.length;
+  q.alive = true; q.life = 4 + Math.random() * 1.5;
+  q.p.copy(origin).add(new V3((Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2, (Math.random() - 0.5) * 0.2));
+  q.v.set(dir.x + (Math.random() - 0.5) * spread, dir.y + (Math.random() - 0.5) * spread, dir.z + (Math.random() - 0.5) * spread).normalize()
+    .multiplyScalar(speed * (0.6 + Math.random() * 0.6));
+  q.r.set(Math.random() * 6, Math.random() * 6, Math.random() * 6);
+  q.w.set((Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14, (Math.random() - 0.5) * 14);
+}
+function confettiBurst(n, pw) {
+  confActive = true;
+  const L = backbox.localToWorld(new V3(-2.3, 2.1, 0.2)), R = backbox.localToWorld(new V3(2.3, 2.1, 0.2));
+  const C = trayGroup.localToWorld(new V3(0, 0.4, 0.3));
+  const sp = 6 + pw * 3;
+  for (let i = 0; i < n; i++) {
+    const side = i % 3;
+    if (side === 0) emit(confetti, L, new V3(0.7, 1.2, 0.9), 0.9, sp);
+    else if (side === 1) emit(confetti, R, new V3(-0.7, 1.2, 0.9), 0.9, sp);
+    else emit(confetti, C, new V3(0, 1.6, 0.5), 1.1, sp * 1.05);
+  }
+  const ns = Math.round(16 + pw * 50);
+  for (let i = 0; i < ns; i++) emit(streamers, i % 2 ? L : R, new V3(i % 2 ? 0.6 : -0.6, 1.3, 0.8), 0.7, sp * 0.9);
+  sfx.popper();
+}
+function updateParticles(sys, dt, drag, grav) {
+  let any = false;
+  const k = Math.exp(-drag * dt);
+  sys.list.forEach((q, i) => {
+    if (!q.alive) return;
+    any = true;
+    q.life -= dt;
+    if (q.p.y > FLOORY + 0.01) {
+      q.v.y -= grav * dt; q.v.multiplyScalar(k);
+      q.p.x += Math.sin(T * 4 + q.ph) * 0.35 * dt; q.p.addScaledVector(q.v, dt);
+      q.r.x += q.w.x * dt; q.r.y += q.w.y * dt; q.r.z += q.w.z * dt;
+    } else { q.p.y = FLOORY + 0.005; q.r.x = -Math.PI / 2; q.r.y = 0; }
+    const sc = q.life < 0.6 ? Math.max(0, q.life / 0.6) : 1;
+    if (q.life <= 0) q.alive = false;
+    O3.position.copy(q.p); O3.rotation.copy(q.r); O3.scale.setScalar(q.alive ? sc : 0); O3.updateMatrix();
+    sys.m.setMatrixAt(i, O3.matrix);
+  });
+  sys.m.instanceMatrix.needsUpdate = true;
+  O3.rotation.set(0, 0, 0); O3.scale.setScalar(1);
+  return any;
+}
+
+/* ---------- 每幀同步 3D ---------- */
+const tmpV = new V3();
+let panelTimer = 0;
+function sync3D(fdt) {
+  ballMesh.position.copy(bl(ball.x, ball.y, BR * S + 0.003));
+  const headY = PLUNGER_REST + pullVis * 0.3;
+  head.position.copy(bl(LANE_CX, headY + 3, 0.07));
+  coils.forEach((c, i) => { c.position.copy(bl(LANE_CX, headY + 6 + (BOARD_BOT - headY - 6) * (i + 0.5) / coils.length, 0.07)); });
+  knob.position.set(KNOB0.x, KNOB0.y - pullVis * 0.0045, KNOB0.z + pullVis * 0.002);
+  rod.position.set(KNOB0.x, knob.position.y, 0.06); rod.scale.y = -knob.position.y;
+  knobBall.material.emissiveIntensity = state === 'READY' && !dragging && !keyPull ? 0.12 + 0.12 * Math.sin(T * 6) : 0;
+
+  // 釘子亮光
+  let dirty = false;
+  for (const p of pins) {
+    if (p.glow > 0 || p.wasGlow) {
+      p.mesh.setColorAt(p.idx, tmpC.setScalar(1 + p.glow * 3)); p.wasGlow = p.glow > 0; dirty = true; p.mesh.userData.dirty = true;
+    }
+  }
+  if (dirty) for (const m of pinMeshes) if (m.userData.dirty) { m.instanceColor.needsUpdate = true; m.userData.dirty = false; }
+
+  drawPockets(); pocketTex.needsUpdate = true;
+  for (let i = 0; i < 6; i++) lampGlow[i].visible = lampOn(i);
+
+  panelTimer -= fdt;
+  const sig = `${balls}|${bet}|${state === 'ROLL' ? rollIdx : mult}|${state}|${[0, 1, 2, 3, 4, 5].map(lampOn).join('')}`;
+  if (sig !== panelSig && panelTimer <= 0) { panelSig = sig; drawPanel(); panelTex.needsUpdate = true; panelTimer = 0.05; }
+
+  for (const b of BTN) {
+    const usable = btnUsable(b);
+    b.cap.position.z = b.press > 0 ? -0.04 : 0;
+    b.mat.color.set(b.base); if (!usable) b.mat.color.multiplyScalar(0.45);
+    b.mat.emissiveIntensity = usable && b.id === 'ins' && state === 'IDLE' ? 0.15 + 0.15 * Math.sin(T * 5) : 0;
+    b.lab.material.opacity = usable ? 1 : 0.5;
+    if (b.id === 'ins') { const m = state === 'IDLE' && balls <= 0 ? b.labRefill : b.labNorm; if (b.lab.material.map !== m) { b.lab.material.map = m; b.lab.material.needsUpdate = true; } }
+  }
+
+  pileMesh.count = Math.min(balls, PILE_CAP);
+  let no = 0, ni = 0;
+  for (const f of flyers) {
+    if (f.kind === 'out' && no < 300) {
+      const k = Math.min(1, f.t / f.dur);
+      O3.position.set(f.sx + (f.tx - f.sx) * k, f.sy + (f.ty - f.sy) * k * k, f.sz + (f.tz - f.sz) * k); O3.updateMatrix(); outMesh.setMatrixAt(no++, O3.matrix);
+    } else if (f.kind === 'in' && ni < 120) {
+      const k = Math.max(0, f.t / f.dur), e = k * k * (3 - 2 * k);
+      tmpV.copy(f.from).lerp(slotWorld, e); tmpV.y += Math.sin(k * Math.PI) * 1.2;
+      O3.position.copy(tmpV); O3.updateMatrix(); inMesh.setMatrixAt(ni++, O3.matrix);
+    }
+  }
+  outMesh.count = no; inMesh.count = ni;
+  if (no) outMesh.instanceMatrix.needsUpdate = true;
+  if (ni) inMesh.instanceMatrix.needsUpdate = true;
+
+  if (confActive) {
+    const a = updateParticles(confetti, fdt, 1.4, 3.2), b2 = updateParticles(streamers, fdt, 1.9, 2.4);
+    confActive = a || b2;
+  }
+
+  // 拉桿力道圈
+  if (dragging || keyPull) {
+    const p = pull / PULL_MAX, sc = toScreen(knobBall);
+    meterEl.style.display = 'flex'; meterEl.style.left = sc.x + 'px'; meterEl.style.top = (sc.y - 70) + 'px';
+    meterEl.style.background = `conic-gradient(hsl(${120 - p * 120},95%,55%) ${p * 360}deg, rgba(0,0,0,.45) 0)`;
+    meterSpan.textContent = Math.round(p * 100) + '%';
+  } else meterEl.style.display = 'none';
+}
+function btnUsable(b) {
+  if (b.id === 'ins') return (state === 'IDLE' && !busyPayout()) || ((state === 'ROLL' || state === 'READY') && bet < MAX_BET && balls > 0) || (state === 'RESULT' && canSkip());
+  return (state === 'IDLE' && balls > 0 && !busyPayout()) || ((state === 'ROLL' || state === 'READY') && bet < MAX_BET && balls > 0) || (state === 'RESULT' && canSkip() && balls > 0);
+}
+function press(id) { const b = BTN.find(v => v.id === id); if (!b) return; b.press = 0.12; b.act(); }
+function toScreen(obj) {
+  obj.getWorldPosition(tmpV); tmpV.project(camera);
+  const r = cv.getBoundingClientRect();
+  return { x: r.left + (tmpV.x + 1) / 2 * r.width, y: r.top + (1 - tmpV.y) / 2 * r.height };
+}
+
+/* ---------- 相機：自動把整台機器放進畫面 ---------- */
+// 取機身外殼的實際頂點來計算取景（比外框盒更貼近）
+let fitPts = null;
+function fitPoints() {
+  if (fitPts) return fitPts;
+  fitPts = [];
+  machine.updateMatrixWorld(true);
+  machine.traverse(o => {
+    if (!o.isMesh || o.isInstancedMesh || !o.geometry.attributes.position) return;
+    const pos = o.geometry.attributes.position, step = Math.max(1, Math.floor(pos.count / 200));
+    for (let i = 0; i < pos.count; i += step) fitPts.push(new V3().fromBufferAttribute(pos, i).applyMatrix4(o.matrixWorld));
+  });
+  return fitPts;
+}
+// 視角參數：左右角度、上下角度（度）、遠近倍率、畫面平移；直式與橫式各記一組
+const D2R = Math.PI / 180;
+const VIEW_LIM = { yaw: [-45, 45], el: [10, 85], zoom: [0.6, 2.2], px: [-1, 1], py: [-1, 1] };
+function defView() { const p = innerWidth < innerHeight; return { yaw: p ? 7 : 14, el: p ? 40 : 36, zoom: 1, px: 0, py: 0 }; }
+const PRESETS = {
+  def: () => defView(),
+  front: () => ({ yaw: 0, el: 28, zoom: 1, px: 0, py: 0 }),
+  top: () => ({ yaw: 0, el: 78, zoom: 1, px: 0, py: 0 }),
+  side: () => ({ yaw: 34, el: 30, zoom: 1, px: 0, py: 0 }),
+  play: () => ({ yaw: 0, el: 55, zoom: 1.3, px: 0, py: -0.02 }),
+};
+function camKey() { return 'dzzj_cam_' + (innerWidth < innerHeight ? 'p' : 'l'); }
+function loadView() {
+  try { const v = JSON.parse(localStorage.getItem(camKey())); if (v && typeof v.yaw === 'number') return clampView(Object.assign(defView(), v)); } catch (e) {}
+  return defView();
+}
+function saveView() { try { localStorage.setItem(camKey(), JSON.stringify(view)); } catch (e) {} }
+function clampView(v) { for (const k in VIEW_LIM) v[k] = Math.max(VIEW_LIM[k][0], Math.min(VIEW_LIM[k][1], v[k])); return v; }
+let view = loadView(), lastPortrait = null;
+function fitCamera() {
+  const w = innerWidth, h = innerHeight;
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setSize(w, h);
+  camera.aspect = w / h; camera.fov = w < h ? 46 : 38; camera.updateProjectionMatrix();
+  if ((w < h) !== lastPortrait) { lastPortrait = w < h; view = loadView(); syncPanel(); }
+  applyView();
+}
+// 先自動把整台機器放進畫面，再套用使用者的遠近與平移
+function applyView() {
+  const h = innerHeight;
+  const EL = view.el * D2R, YAW = view.yaw * D2R;
+  const box = new THREE.Box3().setFromObject(machine);
+  const center = box.getCenter(new V3());
+  const corners = fitPoints();
+  const dir = new V3(Math.sin(YAW) * Math.cos(EL), Math.sin(EL), Math.cos(YAW) * Math.cos(EL));
+  const topLim = 1 - 120 / h;                  // 留空間給上方訊息列
+  let lo = 2, hi = 80;
+  for (let it = 0; it < 30; it++) {
+    const d = (lo + hi) / 2;
+    camera.position.copy(center).addScaledVector(dir, d); camera.lookAt(center); camera.updateMatrixWorld();
+    let ok = true, minY = 9, maxY = -9;
+    for (const c of corners) { const p = c.clone().project(camera); if (Math.abs(p.x) > 0.97) ok = false; minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); }
+    if (maxY - minY > topLim + 0.97) ok = false;
+    ok ? hi = d : lo = d;
+  }
+  camera.position.copy(center).addScaledVector(dir, hi); camera.lookAt(center); camera.updateMatrixWorld();
+  let minY = 9, maxY = -9, minX = 9, maxX = -9;
+  for (const c of corners) { const p = c.clone().project(camera); minY = Math.min(minY, p.y); maxY = Math.max(maxY, p.y); minX = Math.min(minX, p.x); maxX = Math.max(maxX, p.x); }
+  // 置中到可用範圍（以平移視線達成）
+  const shift = ((maxY + minY) / 2 - (topLim - 0.97) / 2), shiftX = (maxX + minX) / 2;
+  const up = new V3(0, 1, 0).applyQuaternion(camera.quaternion), right = new V3(1, 0, 0).applyQuaternion(camera.quaternion);
+  const viewH = 2 * hi * Math.tan(camera.fov * Math.PI / 360);
+  const target = center.clone()
+    .addScaledVector(up, (shift + view.py) * viewH / 2)
+    .addScaledVector(right, (shiftX + view.px) * viewH / 2 * camera.aspect);
+  camera.position.copy(target).addScaledVector(dir, hi / view.zoom); camera.lookAt(target); camera.updateMatrixWorld();
+}
+addEventListener('resize', fitCamera);
+
+/* ---------- 視角調整模式 ---------- */
+const camBtn = document.getElementById('camBtn'), camPanel = document.getElementById('camPanel');
+const CAM_INPUTS = {
+  yaw: { el: document.getElementById('cYaw'), scale: 1, fmt: v => Math.round(v) + '°' },
+  el: { el: document.getElementById('cEl'), scale: 1, fmt: v => Math.round(v) + '°' },
+  zoom: { el: document.getElementById('cZoom'), scale: 100, fmt: v => Math.round(v * 100) + '%' },
+  py: { el: document.getElementById('cPy'), scale: 100, fmt: v => Math.round(v * 100) },
+  px: { el: document.getElementById('cPx'), scale: 100, fmt: v => Math.round(v * 100) },
+};
+let camEdit = false;
+function syncPanel() {
+  for (const k in CAM_INPUTS) {
+    const c = CAM_INPUTS[k]; c.el.value = view[k] * c.scale; c.el.nextElementSibling.textContent = c.fmt(view[k]);
+  }
+}
+for (const k in CAM_INPUTS) {
+  const c = CAM_INPUTS[k];
+  c.el.min = VIEW_LIM[k][0] * c.scale; c.el.max = VIEW_LIM[k][1] * c.scale;
+  c.el.addEventListener('input', () => { view[k] = +c.el.value / c.scale; c.el.nextElementSibling.textContent = c.fmt(view[k]); applyView(); saveView(); });
+}
+camPanel.querySelectorAll('[data-p]').forEach(b => b.addEventListener('click', () => {
+  view = clampView(PRESETS[b.dataset.p]()); syncPanel(); applyView(); saveView();
+}));
+function setCamEdit(on) {
+  camEdit = on; camPanel.classList.toggle('show', on); camBtn.classList.toggle('on', on);
+  if (on) say('視角調整中：拖曳旋轉、滾輪或雙指縮放', '#8ff');
+  else say(state === 'IDLE' ? (balls > 0 ? '投入小鋼珠開始' : '珠子用完了，按「補珠」領 100 顆') : '', '#fff');
+}
+camBtn.addEventListener('pointerdown', e => { e.stopPropagation(); setCamEdit(!camEdit); });
+document.getElementById('camDone').addEventListener('click', () => setCamEdit(false));
+// 手勢：單指／左鍵拖曳旋轉，右鍵或 Shift 拖曳平移，雙指捏合縮放＋平移，滾輪縮放
+const ptrs = new Map();
+let gest = null;
+function gestStart() {
+  const p = [...ptrs.values()];
+  if (p.length >= 2) {
+    gest = { type: 'pinch', d0: Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y), cx: (p[0].x + p[1].x) / 2, cy: (p[0].y + p[1].y) / 2, v0: Object.assign({}, view) };
+  } else if (p.length === 1) {
+    gest = { type: p[0].pan ? 'pan' : 'rot', x: p[0].x, y: p[0].y, v0: Object.assign({}, view) };
+  } else gest = null;
+}
+function camPointerDown(e) {
+  ptrs.set(e.pointerId, { x: e.clientX, y: e.clientY, pan: e.button === 2 || e.shiftKey });
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+  gestStart();
+}
+function camPointerMove(e) {
+  if (!ptrs.has(e.pointerId)) return;
+  const q = ptrs.get(e.pointerId); q.x = e.clientX; q.y = e.clientY;
+  if (!gest) return;
+  const w = innerWidth, h = innerHeight, v0 = gest.v0;
+  if (gest.type === 'rot') {
+    view.yaw = v0.yaw - (q.x - gest.x) * 0.25;
+    view.el = v0.el + (q.y - gest.y) * 0.2;
+  } else if (gest.type === 'pan') {
+    view.px = v0.px - (q.x - gest.x) / (w / 2) / view.zoom;
+    view.py = v0.py + (q.y - gest.y) / (h / 2) / view.zoom;
+  } else {
+    const p = [...ptrs.values()];
+    const d = Math.hypot(p[0].x - p[1].x, p[0].y - p[1].y), cx = (p[0].x + p[1].x) / 2, cy = (p[0].y + p[1].y) / 2;
+    view.zoom = v0.zoom * d / Math.max(10, gest.d0);
+    view.px = v0.px - (cx - gest.cx) / (w / 2) / view.zoom;
+    view.py = v0.py + (cy - gest.cy) / (h / 2) / view.zoom;
+  }
+  clampView(view); applyView(); syncPanel();
+}
+function camPointerUp(e) {
+  if (!ptrs.delete(e.pointerId)) return;
+  gestStart(); saveView();
+}
+cv.addEventListener('wheel', e => {
+  if (!camEdit) return;
+  e.preventDefault();
+  view.zoom *= Math.exp(-e.deltaY * 0.0015); clampView(view); applyView(); syncPanel(); saveView();
+}, { passive: false });
+cv.addEventListener('contextmenu', e => e.preventDefault());
+
+/* ---------- 輸入 ---------- */
+const meterEl = document.getElementById('meter'), meterSpan = meterEl.querySelector('span');
+const ray = new THREE.Raycaster(), mv = new THREE.Vector2();
+let dragId = null;
+function startDrag(e) {
+  dragging = true; dragStart = e.clientY; pull = 0; dragId = e.pointerId;
+  try { cv.setPointerCapture(e.pointerId); } catch (err) {}
+}
+cv.addEventListener('pointerdown', e => {
+  e.preventDefault(); au();
+  if (camEdit) { camPointerDown(e); return; }
+  const r = cv.getBoundingClientRect();
+  mv.set((e.clientX - r.left) / r.width * 2 - 1, -((e.clientY - r.top) / r.height) * 2 + 1);
+  ray.setFromCamera(mv, camera);
+  const hits = ray.intersectObjects(clickables, true);
+  if (hits.length) {
+    let o = hits[0].object; while (o && !o.userData.id) o = o.parent;
+    if (o) {
+      if (o.userData.id === 'knob') startDrag(e);
+      else if (o.userData.id === 'slot') press('ins');
+      else press(o.userData.id);
+      return;
+    }
+  }
+  const k = toScreen(knobBall);
+  if (Math.hypot(e.clientX - k.x, e.clientY - k.y) < Math.max(60, innerHeight * 0.08)) startDrag(e);
+});
+cv.addEventListener('pointermove', e => {
+  if (ptrs.size) { e.preventDefault(); camPointerMove(e); return; }
+  if (!dragging || e.pointerId !== dragId) return;
+  e.preventDefault();
+  pull = Math.max(0, Math.min(PULL_MAX, (e.clientY - dragStart) * PULL_MAX / Math.max(90, innerHeight * 0.14)));
+});
+function endDrag(e) { camPointerUp(e); if (dragging && e.pointerId === dragId) { release(); dragId = null; } }
+cv.addEventListener('pointerup', endDrag);
+cv.addEventListener('pointercancel', endDrag);
+addEventListener('keydown', e => {
+  if (e.code === 'Space' || e.code === 'ArrowDown') { e.preventDefault(); au(); if (!keyPull && !e.repeat) { keyPull = true; pull = 0; } return; }
+  if (e.repeat) return;
+  au();
+  if (e.code === 'KeyZ' || e.code === 'Enter') press('ins');
+  else if (e.code === 'KeyX' || e.code === 'ArrowUp') press('p1');
+  else if (e.code === 'KeyC') press('p10');
+  else if (e.code === 'KeyV') press('max');
+  else if (e.code === 'KeyM') toggleMute();
+});
+addEventListener('keyup', e => { if ((e.code === 'Space' || e.code === 'ArrowDown') && keyPull) { e.preventDefault(); release(); } });
+const muteBtn = document.getElementById('mute');
+function toggleMute() { muted = !muted; muteBtn.textContent = muted ? '🔇' : '🔊'; }
+muteBtn.addEventListener('pointerdown', e => { e.stopPropagation(); au(); toggleMute(); });
+if (!isTouch) document.getElementById('keys').style.display = 'block';
+
+/* ---------- 測試用：離線模擬落點分布 ---------- */
+window.__sim = function (power, n = 50) {
+  const res = {};
+  for (let k = 0; k < n; k++) {
+    const b = { x: LANE_CX, y: BALL_REST, vx: (Math.random() - 0.5) * 8, vy: -launchVel(power), inField: false, still: 0 };
+    let t = 0, r = null;
+    while (t < 20 && !(r = updateBall(b, 1 / 60, false))) t += 1 / 60;
+    const key2 = r ? (r.type === 'pocket' ? r.idx : r.type) : 'timeout';
+    res[key2] = (res[key2] || 0) + 1;
+  }
+  return res;
+};
+
+fitCamera();
+say(balls > 0 ? '投入小鋼珠開始' : '珠子用完了，按「補珠」領 100 顆', '#fff');
+let last = performance.now();
+function frame(now) {
+  const fdt = Math.min(0.033, (now - last) / 1000); last = now;
+  update(fdt); sync3D(fdt);
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+requestAnimationFrame(frame);
+</script>
+</body>
+</html>
